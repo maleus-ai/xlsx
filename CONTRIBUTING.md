@@ -122,12 +122,24 @@ Running the release workflow without a tag stops after `build`: the `publish` jo
 only runs on a tag.
 
 ```sh
+# `gh workflow run` says nothing about the run it created, so it has to be looked
+# up: the newest run of that workflow, once the API has got round to listing it.
 gh workflow run release.yml --repo maleus-ai/xlsx
-gh run download <run-id> --repo maleus-ai/xlsx \
+sleep 5
+RUN=$(gh run list --repo maleus-ai/xlsx --workflow release.yml \
+  --limit 1 --json databaseId -q '.[0].databaseId')
+
+# Prints the run it is following, which is also how you check it picked the one
+# you just dispatched rather than something else that happened to start.
+gh run watch "$RUN" --repo maleus-ai/xlsx
+
+# Passing the run explicitly matters: without it, `gh run download` takes the
+# newest artifact in the repository, whichever run produced it.
+gh run download "$RUN" --repo maleus-ai/xlsx \
   --dir crates/xlsx-node/artifacts --pattern 'bindings-*'
 
-# `gh run download` puts each artifact in its own directory; the assembly wants
-# them side by side.
+# It puts each artifact in a directory of its own; the assembly wants them side
+# by side.
 find crates/xlsx-node/artifacts -name '*.node' \
   -exec mv {} crates/xlsx-node/artifacts/ \;
 
