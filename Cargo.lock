@@ -476,7 +476,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "xlsx-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "calamine",
  "quick-xml",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "xlsx-node"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "napi",
  "napi-build",
