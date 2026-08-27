@@ -123,6 +123,10 @@ git push -u origin chore/release-0.2.0 && gh pr create --fill
 It refuses to go backwards, because a published npm version cannot be taken
 back — which also means it cannot undo itself. `git checkout` can.
 
+It also rebuilds `binding.js`, which is generated, committed, and carries the
+version in fifty-four checks of its own. That is why the bump takes a few
+seconds rather than none.
+
 Once the pull request is merged, tag **what landed on main**, not the branch: a
 squash or a merge commit is not the commit that was pushed, and the tag is what
 the release job builds from.
@@ -196,8 +200,11 @@ find crates/xlsx-node/artifacts -name '*.node' \
 
 cd crates/xlsx-node
 pnpm exec napi create-npm-dirs
-node ../../scripts/prepare-npm-packages.mjs
 pnpm exec napi artifacts
+
+# Last: it writes optionalDependencies into the manifest, which puts it out of
+# step with the lockfile, and `pnpm exec` refuses to run anything after that.
+node ../../scripts/prepare-npm-packages.mjs
 
 # Not `napi pre-publish`: it publishes the platform packages itself unless told
 # not to, and everything else it does has already been done above.

@@ -112,6 +112,13 @@ console.log("  crates/xlsx-node/package.json");
 run("cargo", ["update", "--workspace", "--quiet"]);
 run("pnpm", ["install", "--lockfile-only", "--silent"]);
 
+// `binding.js` is generated, committed, and carries the version in fifty-four
+// version checks of its own. Leaving it behind ships a package that refuses its
+// own binary under NAPI_RS_ENFORCE_VERSION_CHECK — and turns CI red on the
+// release commit, which is the worst moment to be red. A debug build regenerates
+// exactly the same file as a release one, and takes seconds.
+run("pnpm", ["--filter", "@maleus/xlsx-reader", "run", "build:debug"]);
+
 console.log(
   "\nRead the diff, then open it as a pull request — `main` takes one:\n",
 );

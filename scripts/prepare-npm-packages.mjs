@@ -5,7 +5,10 @@
 //
 //   node scripts/prepare-npm-packages.mjs
 //
-// Run between `napi create-npm-dirs` and `napi artifacts`. Two jobs:
+// Run *after* `napi create-npm-dirs` and `napi artifacts`, and after any other
+// pnpm command: writing the optionalDependencies below puts `package.json` out
+// of step with the lockfile, and `pnpm exec` refuses to run anything once that
+// is true. Two jobs:
 //
 // **Strip the search metadata from the platform packages.** `create-npm-dirs`
 // copies the root package's description and keywords into each of the five.
