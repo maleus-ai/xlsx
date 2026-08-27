@@ -68,12 +68,5 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6"
-  },
-  "optionalDependencies": {
-    "@maleus/xlsx-reader-linux-x64-gnu": "0.1.0",
-    "@maleus/xlsx-reader-linux-arm64-gnu": "0.1.0",
-    "@maleus/xlsx-reader-linux-x64-musl": "0.1.0",
-    "@maleus/xlsx-reader-linux-arm64-musl": "0.1.0",
-    "@maleus/xlsx-reader-darwin-arm64": "0.1.0"
   }
 }
