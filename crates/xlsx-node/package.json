@@ -1,0 +1,72 @@
+{
+  "name": "@maleus/xlsx-reader",
+  "version": "0.1.0",
+  "description": "Streaming XLSX (Excel) reader for Node, in Rust: typed rows, dates as ISO 8601, at bounded memory",
+  "keywords": [
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "ooxml",
+    "spreadsheetml",
+    "reader",
+    "parser",
+    "stream",
+    "streaming",
+    "import",
+    "rust",
+    "native",
+    "napi",
+    "napi-rs",
+    "zip-bomb"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/maleus-ai/xlsx#readme",
+  "bugs": {
+    "url": "https://github.com/maleus-ai/xlsx/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maleus-ai/xlsx.git",
+    "directory": "crates/xlsx-node"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "binding.js",
+    "binding.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">= 20"
+  },
+  "napi": {
+    "binaryName": "xlsx-reader",
+    "packageName": "@maleus/xlsx-reader",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "aarch64-apple-darwin"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release --manifest-path Cargo.toml --js binding.js --dts binding.d.ts",
+    "build:debug": "napi build --platform --manifest-path Cargo.toml --js binding.js --dts binding.d.ts",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "artifacts": "napi artifacts",
+    "napi:npm-dirs": "napi create-npm-dirs && node ../../scripts/prepare-npm-packages.mjs",
+    "napi:version": "napi version",
+    "prepublishOnly": "napi pre-publish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.8.6"
+  }
+}
