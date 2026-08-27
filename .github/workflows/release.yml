@@ -203,14 +203,20 @@ jobs:
       # each of the six packages. Until that is in place this step fails with
       # `ENEEDAUTH`, having published nothing.
       #
+      # `--ignore-scripts`, so that publishing runs nothing but the upload. A
+      # lifecycle script here would run six times over — once per package — and
+      # `napi pre-publish` in one of them publishes all five platform packages
+      # by itself, which is how a release once got half out before failing on a
+      # version the registry had already staged.
+      #
       # The platform packages go first: the root resolves them by name.
       - name: Publish
         working-directory: crates/xlsx-node
         run: |
           for dir in npm/*/; do
-            npm publish "$dir" --access public
+            npm publish "$dir" --access public --ignore-scripts
           done
-          npm publish --access public
+          npm publish --access public --ignore-scripts
 
       - name: GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.4.1

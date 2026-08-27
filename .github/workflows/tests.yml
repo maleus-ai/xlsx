@@ -101,6 +101,21 @@ jobs:
       # `binding.js` and `binding.d.ts` are generated from the Rust source and
       # committed, because the publish job assembles the package without
       # building it. A stale copy would ship an API that does not exist.
+      # `napi pre-publish` publishes the platform packages on its own. Reached
+      # through a lifecycle hook it runs once per `npm publish`, and the release
+      # then tries to publish what it has already put out.
+      - name: The manifest declares no publish-time script
+        run: |
+          node -e '
+            const s = require("./crates/xlsx-node/package.json").scripts ?? {};
+            const hooks = ["prepublish", "prepublishOnly", "prepare", "prepack", "postpublish"];
+            const found = hooks.filter((h) => s[h]);
+            if (found.length) {
+              console.error(`publishing must run no lifecycle script; found: ${found.join(", ")}`);
+              process.exit(1);
+            }
+          '
+
       - name: The generated binding is in sync
         run: git diff --exit-code -- crates/xlsx-node/binding.js crates/xlsx-node/binding.d.ts
 
