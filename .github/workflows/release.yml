@@ -172,11 +172,12 @@ jobs:
         working-directory: crates/xlsx-node
         run: |
           pnpm exec napi create-npm-dirs
-          # `create-npm-dirs` copies the root package's search metadata into all
-          # five. Published as is, one search returns six near-identical results.
-          node ../../scripts/trim-platform-packages.mjs
+          # Strips the search metadata from the five, and writes the root
+          # package's optionalDependencies — which cannot be committed, because
+          # they name packages that do not exist until this step creates them.
+          node ../../scripts/prepare-npm-packages.mjs
           pnpm exec napi artifacts
-          pnpm exec napi pre-publish -t npm --skip-gh-release
+          pnpm exec napi pre-publish -t npm
 
       - name: Publish
         working-directory: crates/xlsx-node

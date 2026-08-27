@@ -93,9 +93,17 @@ and publishes six npm packages: `@maleus/xlsx-reader`, which carries no binary,
 and one package per platform carrying exactly one. They share a version;
 `napi pre-publish` keeps them in step.
 
-`scripts/trim-platform-packages.mjs` strips the search metadata from the five
-before they go out — published as is, one search for "excel" would return six
-near-identical results, only one of which anybody should install.
+`scripts/prepare-npm-packages.mjs` runs between `napi create-npm-dirs` and
+`napi artifacts`. It strips the search metadata from the five — published as is,
+one search for "excel" would return six near-identical results, only one of which
+anybody should install — and it writes the root package's
+`optionalDependencies`.
+
+Those cannot live in the committed manifest: they name packages that do not
+exist until the release job creates them, so there is nothing for
+`pnpm install --frozen-lockfile` to resolve and no lockfile to generate. Deriving
+them from the directories about to be published is also what keeps them from
+drifting out of step with the release.
 
 Publishing needs an `NPM_TOKEN` secret with write access to the `@maleus` scope,
 not to a list of packages: the platform packages for a new version do not exist

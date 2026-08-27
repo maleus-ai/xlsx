@@ -62,18 +62,11 @@
     "build:debug": "napi build --platform --manifest-path Cargo.toml --js binding.js --dts binding.d.ts",
     "test": "node --test \"test/**/*.test.mjs\"",
     "artifacts": "napi artifacts",
-    "napi:npm-dirs": "napi create-npm-dirs && node ../../scripts/trim-platform-packages.mjs",
+    "napi:npm-dirs": "napi create-npm-dirs && node ../../scripts/prepare-npm-packages.mjs",
     "napi:version": "napi version",
     "prepublishOnly": "napi pre-publish -t npm"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6"
-  },
-  "optionalDependencies": {
-    "@maleus/xlsx-reader-linux-x64-gnu": "0.1.0",
-    "@maleus/xlsx-reader-linux-arm64-gnu": "0.1.0",
-    "@maleus/xlsx-reader-linux-x64-musl": "0.1.0",
-    "@maleus/xlsx-reader-linux-arm64-musl": "0.1.0",
-    "@maleus/xlsx-reader-darwin-arm64": "0.1.0"
   }
 }
