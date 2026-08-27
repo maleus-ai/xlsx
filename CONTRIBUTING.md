@@ -113,11 +113,34 @@ Forgetting one either turns CI red or publishes a package whose manifest
 disagrees with the crate it was built from.
 
 ```sh
+git checkout main && git pull
+git checkout -b chore/release-0.2.0
 node scripts/bump-version.mjs minor    # or major, patch, or 1.2.3
+git commit -am "chore: release 0.2.0"
+git push -u origin chore/release-0.2.0 && gh pr create --fill
 ```
 
 It refuses to go backwards, because a published npm version cannot be taken
 back — which also means it cannot undo itself. `git checkout` can.
+
+Once the pull request is merged, tag **what landed on main**, not the branch: a
+squash or a merge commit is not the commit that was pushed, and the tag is what
+the release job builds from.
+
+```sh
+git checkout main && git pull
+
+# Cheap insurance against tagging a version the tree does not carry.
+node -e "
+  const v = require('./crates/xlsx-node/package.json').version;
+  if (v !== process.argv[1]) { console.error(\`main is at \${v}\`); process.exit(1); }
+" 0.2.0
+
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`main` requires a pull request; tags do not, so the tag goes straight up. That
+push is what starts the release.
 
 The platform packages are not bumped here: they do not exist until the release
 job creates them, and `prepare-npm-packages.mjs` gives them the manifest's
