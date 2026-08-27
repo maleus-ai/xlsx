@@ -175,11 +175,14 @@ jobs:
         working-directory: crates/xlsx-node
         run: |
           pnpm exec napi create-npm-dirs
-          # Strips the search metadata from the five, and writes the root
-          # package's optionalDependencies — which cannot be committed, because
-          # they name packages that do not exist until this step creates them.
-          node ../../scripts/prepare-npm-packages.mjs
           pnpm exec napi artifacts
+          # Last, and it has to be last. It writes the root package's
+          # optionalDependencies — which cannot be committed, because they name
+          # packages that do not exist until this step creates them — and that
+          # edit puts `package.json` out of step with the lockfile. `pnpm exec`
+          # checks the two agree before it runs anything, so any pnpm command
+          # after this point fails with ERR_PNPM_OUTDATED_LOCKFILE.
+          node ../../scripts/prepare-npm-packages.mjs
 
       # Published here rather than through `napi pre-publish`, which publishes the
       # platform packages itself unless told not to — and would then have this

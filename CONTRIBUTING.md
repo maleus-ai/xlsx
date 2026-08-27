@@ -196,8 +196,11 @@ find crates/xlsx-node/artifacts -name '*.node' \
 
 cd crates/xlsx-node
 pnpm exec napi create-npm-dirs
-node ../../scripts/prepare-npm-packages.mjs
 pnpm exec napi artifacts
+
+# Last: it writes optionalDependencies into the manifest, which puts it out of
+# step with the lockfile, and `pnpm exec` refuses to run anything after that.
+node ../../scripts/prepare-npm-packages.mjs
 
 # Not `napi pre-publish`: it publishes the platform packages itself unless told
 # not to, and everything else it does has already been done above.
