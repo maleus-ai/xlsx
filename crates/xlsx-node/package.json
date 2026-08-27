@@ -63,8 +63,7 @@
     "test": "node --test \"test/**/*.test.mjs\"",
     "artifacts": "napi artifacts",
     "napi:npm-dirs": "napi create-npm-dirs && node ../../scripts/prepare-npm-packages.mjs",
-    "napi:version": "napi version",
-    "prepublishOnly": "napi pre-publish -t npm"
+    "napi:version": "napi version"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6"

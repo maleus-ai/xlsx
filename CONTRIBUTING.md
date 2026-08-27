@@ -90,8 +90,14 @@ a dependency bump could quietly break.
 
 Tagging `v*` runs `.github/workflows/release.yml`, which builds the five targets
 and publishes six npm packages: `@maleus/xlsx-reader`, which carries no binary,
-and one package per platform carrying exactly one. They share a version;
-`napi pre-publish` keeps them in step.
+and one package per platform carrying exactly one. They share a version, which
+`bump-version.mjs` sets before the release and `prepare-npm-packages.mjs` copies
+into the platform manifests.
+
+`napi pre-publish` is not used, and there is deliberately no `prepublishOnly`
+script: it publishes the platform packages itself, so anything that then
+publishes them again lands on a version the registry has already staged. That
+is how a release once got half-published.
 
 `scripts/prepare-npm-packages.mjs` runs between `napi create-npm-dirs` and
 `napi artifacts`. It strips the search metadata from the five — published as is,
