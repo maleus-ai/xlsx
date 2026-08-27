@@ -139,7 +139,13 @@ jobs:
   publish:
     needs: build
     if: github.ref_type == 'tag'
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    # GitHub-hosted, not blacksmith. Trusted publishing attests provenance, and
+    # npm refuses a bundle built anywhere else: "Unsupported GitHub Actions
+    # runner environment: self-hosted". Blacksmith runners are self-hosted as far
+    # as that check is concerned. Nothing here compiles — it downloads the
+    # binaries the build jobs made and publishes them — so there is nothing to
+    # miss.
+    runs-on: ubuntu-latest
     permissions:
       contents: write # the GitHub release
       id-token: write # npm provenance

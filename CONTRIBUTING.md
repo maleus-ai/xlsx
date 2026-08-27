@@ -160,6 +160,11 @@ Publishing goes through npm's trusted publishing: the job exchanges its OIDC
 token for a short-lived credential, so the repository holds no npm secret to
 leak or rotate, and provenance is attested without asking for it.
 
+That attestation is why the publish job runs on a GitHub-hosted runner while
+everything else runs on blacksmith: npm rejects a provenance bundle produced on
+a self-hosted runner, and blacksmith counts as one. Nothing in that job
+compiles, so it costs nothing to move.
+
 A trusted publisher is configured per package, on a page that only exists once
 the package does — which makes the first release a chicken-and-egg. It is
 resolved by publishing that one by hand.
