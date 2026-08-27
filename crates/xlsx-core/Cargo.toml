@@ -1,0 +1,19 @@
+[package]
+name = "xlsx-core"
+description = "Bounded streaming reader for XLSX worksheets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+calamine.workspace = true
+zip.workspace = true
+quick-xml = { version = "0.41", features = ["encoding"] }
+
+[[bin]]
+name = "xlsx-measure"
+path = "src/bin/measure.rs"
+
+[dev-dependencies]
+zip.workspace = true
