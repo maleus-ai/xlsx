@@ -133,6 +133,12 @@ RUN=$(gh run list --repo maleus-ai/xlsx --workflow release.yml \
 # you just dispatched rather than something else that happened to start.
 gh run watch "$RUN" --repo maleus-ai/xlsx
 
+# A finished run does not mean downloadable artifacts: asking too early creates
+# the directories and puts nothing in them, without failing. Wait for all five
+# to be listed.
+until [ "$(gh api "repos/maleus-ai/xlsx/actions/runs/$RUN/artifacts" \
+  -q '.total_count')" = "5" ]; do sleep 5; done
+
 # Passing the run explicitly matters: without it, `gh run download` takes the
 # newest artifact in the repository, whichever run produced it.
 gh run download "$RUN" --repo maleus-ai/xlsx \
