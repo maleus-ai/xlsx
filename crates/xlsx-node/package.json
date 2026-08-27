@@ -68,5 +68,6 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6"
-  }
+  },
+  "//": "The five platform packages are added to optionalDependencies at publish time by scripts/prepare-npm-packages.mjs. They are absent from the committed manifest because they would name a version npm does not have until the release creates it, which makes a version bump uncommittable — see the Releasing section of CONTRIBUTING.md."
 }
