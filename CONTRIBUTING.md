@@ -123,6 +123,10 @@ git push -u origin chore/release-0.2.0 && gh pr create --fill
 It refuses to go backwards, because a published npm version cannot be taken
 back — which also means it cannot undo itself. `git checkout` can.
 
+It also rebuilds `binding.js`, which is generated, committed, and carries the
+version in fifty-four checks of its own. That is why the bump takes a few
+seconds rather than none.
+
 Once the pull request is merged, tag **what landed on main**, not the branch: a
 squash or a merge commit is not the commit that was pushed, and the tag is what
 the release job builds from.
