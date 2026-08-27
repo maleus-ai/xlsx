@@ -153,11 +153,16 @@ cd crates/xlsx-node
 pnpm exec napi create-npm-dirs
 node ../../scripts/prepare-npm-packages.mjs
 pnpm exec napi artifacts
-pnpm exec napi pre-publish -t npm
 
+# Not `napi pre-publish`: it publishes the platform packages itself unless told
+# not to, and everything else it does has already been done above.
 npm login
 for dir in npm/*/; do npm publish "$dir" --access public; done
 npm publish --access public
+
+# `prepare-npm-packages.mjs` wrote optionalDependencies into the manifest for
+# the publish. That state does not belong in the repository.
+git checkout package.json
 ```
 
 Then, on npmjs.com, add a trusted publisher to each of the six packages —
