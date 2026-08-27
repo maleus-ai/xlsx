@@ -13,22 +13,6 @@ importers:
       '@napi-rs/cli':
         specifier: ^3.8.6
         version: 3.8.6(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)
-    optionalDependencies:
-      '@maleus/xlsx-reader-darwin-arm64':
-        specifier: 0.1.0
-        version: 0.1.0
-      '@maleus/xlsx-reader-linux-arm64-gnu':
-        specifier: 0.1.0
-        version: 0.1.0
-      '@maleus/xlsx-reader-linux-arm64-musl':
-        specifier: 0.1.0
-        version: 0.1.0
-      '@maleus/xlsx-reader-linux-x64-gnu':
-        specifier: 0.1.0
-        version: 0.1.0
-      '@maleus/xlsx-reader-linux-x64-musl':
-        specifier: 0.1.0
-        version: 0.1.0
 
 packages:
 
@@ -183,40 +167,6 @@ packages:
     peerDependenciesMeta:
       '@types/node':
         optional: true
-
-  '@maleus/xlsx-reader-darwin-arm64@0.1.0':
-    resolution: {integrity: sha512-4GZk7ZA5cAM6X8ZZwSPEVjbVZ5GM+LBqXpqnR2njom1/QRW5dxNnV3lhW8rAFyp23j7dojsP+wLUcqiOGC2MYA==}
-    engines: {node: '>= 20'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@maleus/xlsx-reader-linux-arm64-gnu@0.1.0':
-    resolution: {integrity: sha512-tjTu1+P1zRbeCwgEH2q4kMLbtWsSI1n/gmMzfIx8+/xMALU276JGNqlnHNbCsyb+dOimEVKchBErAn1i/5sFrw==}
-    engines: {node: '>= 20'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@maleus/xlsx-reader-linux-arm64-musl@0.1.0':
-    resolution: {integrity: sha512-l3vjLbWteUXkhJQYs2OxaWiJM4p6dZQTr5sgP/pBqjAE6UoIuiWwKTZdBsEbZlcAqBXDkejpR1YXu9rlR4O2Dg==}
-    engines: {node: '>= 20'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
-
-  '@maleus/xlsx-reader-linux-x64-gnu@0.1.0':
-    resolution: {integrity: sha512-kq2dMT6B/SzyeXIh/Hpv9Ibq+4CvQN79D8qn5TpdPmyw/fmZOyT9z0ZALo6yIu5owy3Q7ZSxC35WMkq9H8ElDA==}
-    engines: {node: '>= 20'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@maleus/xlsx-reader-linux-x64-musl@0.1.0':
-    resolution: {integrity: sha512-vitg49m/VsZokmUzJFnerQnGsV+SMuJI/ccxYNP1lqeppievQw00YyQwwf/8CQY/BZkGdOce+qGhAuCbdo/RWg==}
-    engines: {node: '>= 20'}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
 
   '@napi-rs/cli@3.8.6':
     resolution: {integrity: sha512-FnJ9fghsV9Q4zh2aJGPSvQiUlJRC27B6KhzAXcIW2rlSD8keak3mhXw4tJYa3KJkP9whETfsPwqp/DJRnQg5ng==}
@@ -857,21 +807,6 @@ snapshots:
       '@inquirer/type': 4.0.7
 
   '@inquirer/type@4.0.7': {}
-
-  '@maleus/xlsx-reader-darwin-arm64@0.1.0':
-    optional: true
-
-  '@maleus/xlsx-reader-linux-arm64-gnu@0.1.0':
-    optional: true
-
-  '@maleus/xlsx-reader-linux-arm64-musl@0.1.0':
-    optional: true
-
-  '@maleus/xlsx-reader-linux-x64-gnu@0.1.0':
-    optional: true
-
-  '@maleus/xlsx-reader-linux-x64-musl@0.1.0':
-    optional: true
 
   '@napi-rs/cli@3.8.6(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)':
     dependencies:

@@ -105,6 +105,28 @@ exist until the release job creates them, so there is nothing for
 them from the directories about to be published is also what keeps them from
 drifting out of step with the release.
 
+### Bumping the version
+
+The version is written in four files and nothing keeps them in step: the Cargo
+workspace, the npm manifest, and the two lockfiles that record what those say.
+Forgetting one either turns CI red or publishes a package whose manifest
+disagrees with the crate it was built from.
+
+```sh
+node scripts/bump-version.mjs minor    # or major, patch, or 1.2.3
+```
+
+It refuses to go backwards, because a published npm version cannot be taken
+back — which also means it cannot undo itself. `git checkout` can.
+
+The platform packages are not bumped here: they do not exist until the release
+job creates them, and `prepare-npm-packages.mjs` gives them the manifest's
+version at that point. Committing their names to the manifest looks tidy and is
+not workable: a bump would point them at a version npm does not have yet,
+`pnpm install` drops what it cannot resolve, and `--frozen-lockfile` then
+refuses the tree — so the release commit would be red until the release it is
+supposed to produce had already happened.
+
 ### Authentication
 
 Publishing goes through npm's trusted publishing: the job exchanges its OIDC
