@@ -112,6 +112,15 @@ console.log("  crates/xlsx-node/package.json");
 run("cargo", ["update", "--workspace", "--quiet"]);
 run("pnpm", ["install", "--lockfile-only", "--silent"]);
 
-console.log(`\nNow read the diff, then:\n`);
+console.log(
+  "\nRead the diff, then open it as a pull request — `main` takes one:\n",
+);
+console.log(`  git checkout -b chore/release-${next}`);
 console.log(`  git commit -am "chore: release ${next}"`);
-console.log(`  git tag v${next} && git push --follow-tags`);
+console.log(
+  `  git push -u origin chore/release-${next} && gh pr create --fill`,
+);
+console.log("\nOnce merged, tag what landed on main rather than the branch:");
+console.log("a squash or a merge commit is not the commit you pushed.\n");
+console.log("  git checkout main && git pull");
+console.log(`  git tag v${next} && git push origin v${next}`);
