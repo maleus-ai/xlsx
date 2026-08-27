@@ -180,14 +180,21 @@ jobs:
           # they name packages that do not exist until this step creates them.
           node ../../scripts/prepare-npm-packages.mjs
           pnpm exec napi artifacts
-          pnpm exec napi pre-publish -t npm
 
+      # Published here rather than through `napi pre-publish`, which publishes the
+      # platform packages itself unless told not to — and would then have this
+      # step publish them a second time, mid-release, after five of the six were
+      # already out. What it does beyond that, `napi artifacts` and
+      # `prepare-npm-packages.mjs` have already done.
+      #
       # Trusted publishing: npm exchanges this job's OIDC token for a short-lived
       # credential, so there is no secret in the repository to leak or rotate,
       # and provenance is attested without asking. It needs npm 11.5.1 or newer —
       # Node 24 ships 11.6 — and a trusted publisher configured on npmjs.com for
       # each of the six packages. Until that is in place this step fails with
       # `ENEEDAUTH`, having published nothing.
+      #
+      # The platform packages go first: the root resolves them by name.
       - name: Publish
         working-directory: crates/xlsx-node
         run: |
