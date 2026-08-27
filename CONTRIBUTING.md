@@ -105,6 +105,43 @@ exist until the release job creates them, so there is nothing for
 them from the directories about to be published is also what keeps them from
 drifting out of step with the release.
 
-Publishing needs an `NPM_TOKEN` secret with write access to the `@maleus` scope,
-not to a list of packages: the platform packages for a new version do not exist
-until the job creates them.
+### Authentication
+
+Publishing goes through npm's trusted publishing: the job exchanges its OIDC
+token for a short-lived credential, so the repository holds no npm secret to
+leak or rotate, and provenance is attested without asking for it.
+
+A trusted publisher is configured per package, on a page that only exists once
+the package does — which makes the first release a chicken-and-egg. It is
+resolved by publishing that one by hand.
+
+### The first release, by hand
+
+The five binaries still come from CI, because nobody has all five toolchains.
+Running the release workflow without a tag stops after `build`: the `publish` job
+only runs on a tag.
+
+```sh
+gh workflow run release.yml --repo maleus-ai/xlsx
+gh run download <run-id> --repo maleus-ai/xlsx \
+  --dir crates/xlsx-node/artifacts --pattern 'bindings-*'
+
+# `gh run download` puts each artifact in its own directory; the assembly wants
+# them side by side.
+find crates/xlsx-node/artifacts -name '*.node' \
+  -exec mv {} crates/xlsx-node/artifacts/ \;
+
+cd crates/xlsx-node
+pnpm exec napi create-npm-dirs
+node ../../scripts/prepare-npm-packages.mjs
+pnpm exec napi artifacts
+pnpm exec napi pre-publish -t npm
+
+npm login
+for dir in npm/*/; do npm publish "$dir" --access public; done
+npm publish --access public
+```
+
+Then, on npmjs.com, add a trusted publisher to each of the six packages —
+GitHub Actions, `maleus-ai/xlsx`, workflow `release.yml` — and every release
+after that is a tag and nothing else.
