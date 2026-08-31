@@ -267,9 +267,10 @@ crossed it.
 What carries over is the memory property, with one honest qualification. On the
 Rust side it holds outright: **the size of the export does not decide how much
 memory it uses** — a report of ten rows and a report of a million both cost
-about four megabytes. On the Node side it holds for the rows and not for the
-bytes: output chunks accumulate until the export ends, which
-[Measurements](#the-one-thing-that-is-not-flat) sets out with the numbers.
+about four megabytes. On the Node side the rows cost
+nothing that grows, and the output chunks sit under a ceiling of their own that
+does not move with the size of the export —
+[Measurements](#where-the-output-buffers-go) has the figures.
 
 ## The bounds
 
@@ -421,33 +422,45 @@ without the addon and 47.7 MB with it, so the writer's own footprint is inside
 the noise. On its own, outside Node, the Rust side holds **4.2 MB** for a sheet
 at Excel's maximum.
 
-### The one thing that is not flat
+### Where the output buffers go
 
-The third line grows with the size of the **output file**, not with rows, and it
-does not level off:
+The third line of that breakdown is the chunks handed to JavaScript, and they
+are not collected as they are dropped — so on a small export `external` reads as
+roughly the size of the file produced:
 
 | Rows      | Output  | `external` at peak |
 | --------- | ------- | ------------------ |
 | 100 000   | 1.8 MB  | 3.5 MB             |
-| 300 000   | 5.4 MB  | 7.1 MB             |
 | 600 000   | 10.8 MB | 12.5 MB            |
 | 1 048 575 | 18.9 MB | 20.6 MB            |
 
-Every chunk handed to JavaScript stays alive until the export ends, whether the
-consumer is a tight loop or a `createWriteStream`. The cause is that napi-rs
-does not call `napi_adjust_external_memory` for a `Buffer`, so V8 is never told
-those bytes exist and feels no pressure to collect them. They are garbage, not a
-leak — forcing a collection brings the 600 000 row peak down from 101 MB to
-69 MB — but nothing forces one on your behalf.
+Those three figures look like a straight line, and they are not one — every one
+of them sits below the point where it bends. Pushed further, with text that does
+not compress away:
 
-In practice it is bounded by what one worksheet can hold, which for an export of
-ordinary width is tens of megabytes. On a wide sheet it will be more, and if you
-are running against a hard container limit that is the line to watch.
+| Output produced | `external` at peak | Peak RSS |
+| --------------- | ------------------ | -------- |
+| 123 MB          | 63.5 MB            | 154 MB   |
+| 247 MB          | 66.7 MB            | 163 MB   |
+| **432 MB**      | **66.8 MB**        | 184 MB   |
 
-The file does come out in pieces rather than in one allocation — 427 chunks for
-the 600 000 row export, the largest 30 KB — so a consumer forwards fragments
-instead of holding a file. It is the *collection* of those fragments that lags,
-not their production.
+Three and a half times the file for the same ceiling. Sampled over time it is a
+sawtooth — `3 → 15 → 31 → 46 → 16 → 33 → 50 → 4` — climbing to about 64 MB,
+being collected, and climbing again. That number is where V8 forces a global
+collection over externally allocated memory; the ceiling and the shape are
+measured, the attribution to that threshold is an inference from the figure.
+
+So the buffers are **bounded independently of how large the export is**, at
+around 67 MB, and what they hold is cyclical garbage rather than accumulation.
+Nothing here needs a ceiling of its own.
+
+The one case worth knowing about: under a hard container limit close to the
+working set, a sawtooth means RSS sits near its peak rather than near its
+average. It is bounded and predictable, but it is not 20 MB.
+
+The file comes out in pieces rather than in one allocation — 427 chunks for the
+600 000 row export, the largest 30 KB — so a consumer forwards fragments instead
+of holding a file.
 
 ## Contributing
 
