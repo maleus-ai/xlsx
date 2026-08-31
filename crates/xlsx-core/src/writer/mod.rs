@@ -41,6 +41,11 @@
 //! a date from before 1900 writes it as [`CellValue::Text`] and keeps it
 //! exactly, which is better than a cell showing some other day.
 //!
+//! A workbook holds as many sheets as you like. They are filled one after
+//! another — [`XlsxWriter::add_sheet`] moves on, and nothing goes back — which
+//! is the same ordering constraint that holds within a sheet, for the same
+//! reason: a row is on disk by the time the next one is written.
+//!
 //! ```no_run
 //! use xlsx_core::{CellValue, WriterOptions, XlsxWriter};
 //!
@@ -108,7 +113,19 @@ pub struct WriterOptions {
 pub struct XlsxWriter {
     workbook: Workbook,
     formats: Formats,
+    /// Index of the sheet rows are going to. Sheets are filled one after
+    /// another, and `add_sheet` moves this on.
+    current: usize,
+    /// Rows written to the current sheet. Reset by `add_sheet`, because the
+    /// grid limit is per sheet and so is the row a cell lands on.
     next_row: u32,
+    /// Sheet names already used, folded to lower case.
+    ///
+    /// Kept here because the underlying writer only notices a repeat when the
+    /// workbook is saved — which on an export is after every row has been
+    /// written, and reports nothing about which sheet was at fault. Excel
+    /// compares these without regard to case, so this does too.
+    names: Vec<String>,
 }
 
 /// The number formats a date needs to be a date.
@@ -123,7 +140,7 @@ struct Formats {
 }
 
 impl XlsxWriter {
-    /// Open a workbook with one worksheet, in constant-memory mode.
+    /// Open a workbook with its first worksheet, in constant-memory mode.
     pub fn new(options: WriterOptions) -> Result<Self, WriteError> {
         let mut workbook = Workbook::new();
 
@@ -153,11 +170,56 @@ impl XlsxWriter {
         Ok(Self {
             workbook,
             formats,
+            current: 0,
             next_row: 0,
+            names: vec![options.sheet_name.to_lowercase()],
         })
     }
 
-    /// Rows written so far.
+    /// Start a new sheet. Rows written after this go to it.
+    ///
+    /// The sheet already being filled is left as it is: its rows are on their
+    /// own spill file and nothing goes back to them. That is the whole
+    /// constraint — sheets are filled one after another, and a row cannot be
+    /// added to one that has been left behind.
+    ///
+    /// Interleaving would in fact work, since each sheet keeps its own spill
+    /// file and its own row counter. It is not offered because it buys nothing
+    /// an export needs and costs a caller the chance to write to the wrong
+    /// sheet without being told.
+    pub fn add_sheet(&mut self, name: &str) -> Result<(), WriteError> {
+        // Checked before the sheet is created, so a refused name leaves the
+        // workbook exactly as it was.
+        let folded = name.to_lowercase();
+        if self.names.contains(&folded) {
+            return Err(WriteError::InvalidSheetName {
+                name: name.to_owned(),
+                detail: "the workbook already has a sheet by that name; Excel \
+                         compares sheet names without regard to case"
+                    .to_owned(),
+            });
+        }
+
+        let sheet = self.workbook.add_worksheet_with_constant_memory();
+        sheet
+            .set_name(name)
+            .map_err(|error| WriteError::InvalidSheetName {
+                name: name.to_owned(),
+                detail: error.to_string(),
+            })?;
+
+        self.names.push(folded);
+        self.current += 1;
+        self.next_row = 0;
+        Ok(())
+    }
+
+    /// Sheets in the workbook, the one being filled included.
+    pub fn sheet_count(&self) -> usize {
+        self.current + 1
+    }
+
+    /// Rows written to the sheet currently being filled.
     pub fn rows_written(&self) -> u32 {
         self.next_row
     }
@@ -192,7 +254,7 @@ impl XlsxWriter {
         let formats = &self.formats;
         let sheet = self
             .workbook
-            .worksheet_from_index(0)
+            .worksheet_from_index(self.current)
             .map_err(WriteError::from)?;
 
         for (column, cell) in cells.iter().enumerate() {

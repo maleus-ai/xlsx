@@ -395,3 +395,151 @@ fn reading_a_file_that_was_never_written_still_fails_the_reader_s_way() {
 
     assert!(matches!(error, ReadError::Io { .. }), "{error}");
 }
+
+#[test]
+fn a_workbook_can_hold_several_sheets() {
+    let path = scratch("several-sheets");
+    let mut writer = XlsxWriter::new(options("Q1")).expect("open");
+
+    writer
+        .write_row(&[CellValue::Text("first".to_owned())])
+        .expect("write");
+
+    writer.add_sheet("Q2").expect("add a sheet");
+    writer
+        .write_row(&[CellValue::Text("second".to_owned())])
+        .expect("write");
+
+    writer.add_sheet("Q3").expect("add a sheet");
+    writer.write_row(&[CellValue::Number(3.0)]).expect("write");
+
+    assert_eq!(writer.sheet_count(), 3);
+    writer
+        .finish(std::fs::File::create(&path).expect("create"))
+        .expect("finish");
+
+    let mut reader = XlsxReader::open(
+        &path,
+        ReaderOptions {
+            max_decompressed_bytes: 64 << 20,
+            max_rows: 100,
+        },
+    )
+    .expect("open");
+
+    let names: Vec<String> = reader.sheets().iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, vec!["Q1", "Q2", "Q3"]);
+
+    for (name, expected) in [
+        ("Q1", CellValue::Text("first".to_owned())),
+        ("Q2", CellValue::Text("second".to_owned())),
+        ("Q3", CellValue::Number(3.0)),
+    ] {
+        reader.select(name).expect("select");
+        let batch = reader.next_batch(10).expect("read").expect("a batch");
+        assert_eq!(batch[0][0], expected, "sheet {name}");
+    }
+}
+
+#[test]
+fn each_sheet_counts_its_own_rows() {
+    // The row a cell lands on is per sheet, so the counter has to reset —
+    // otherwise the second sheet would start at the first one's height, leaving
+    // a block of blank rows above its data.
+    let path = scratch("per-sheet-rows");
+    let mut writer = XlsxWriter::new(options("Wide")).expect("open");
+
+    for row in 0..5 {
+        writer
+            .write_row(&[CellValue::Number(f64::from(row))])
+            .expect("write");
+    }
+    assert_eq!(writer.rows_written(), 5);
+
+    writer.add_sheet("Narrow").expect("add a sheet");
+    assert_eq!(writer.rows_written(), 0, "the counter must start again");
+
+    writer
+        .write_row(&[CellValue::Text("top".to_owned())])
+        .expect("write");
+    writer
+        .finish(std::fs::File::create(&path).expect("create"))
+        .expect("finish");
+
+    let mut reader = XlsxReader::open(
+        &path,
+        ReaderOptions {
+            max_decompressed_bytes: 64 << 20,
+            max_rows: 100,
+        },
+    )
+    .expect("open");
+    reader.select("Narrow").expect("select");
+
+    let batch = reader.next_batch(10).expect("read").expect("a batch");
+    assert_eq!(
+        batch.len(),
+        1,
+        "the second sheet must hold one row, not six"
+    );
+    assert_eq!(batch[0][0], CellValue::Text("top".to_owned()));
+}
+
+#[test]
+fn a_repeated_sheet_name_is_refused_when_it_is_asked_for() {
+    // The underlying writer only notices at save time, which on an export is
+    // after every row has been written and reports nothing about which sheet
+    // was at fault. Measured: `set_name` returns Ok twice, and `save` then
+    // fails with "Worksheet name 'data' has already been used".
+    let mut writer = XlsxWriter::new(options("Data")).expect("open");
+
+    let error = writer
+        .add_sheet("Data")
+        .expect_err("a repeat, refused up front");
+    assert_eq!(error.code(), "INVALID_SHEET_NAME");
+    assert!(error.to_string().contains("Data"), "{error}");
+
+    // Excel compares them folded, so this is the same name.
+    assert!(writer.add_sheet("DATA").is_err(), "case must not matter");
+    assert!(writer.add_sheet("data").is_err(), "case must not matter");
+
+    // And the refusals left the workbook usable.
+    assert_eq!(writer.sheet_count(), 1);
+    writer.add_sheet("Other").expect("a fresh name still works");
+    assert_eq!(writer.sheet_count(), 2);
+}
+
+#[test]
+fn dates_keep_their_format_on_a_later_sheet() {
+    // The formats are registered on the workbook once, before any sheet
+    // exists. A sheet added later has to still find them.
+    let rows = {
+        let path = scratch("dates-on-sheet-two");
+        let mut writer = XlsxWriter::new(options("First")).expect("open");
+        writer.write_row(&[CellValue::Number(1.0)]).expect("write");
+        writer.add_sheet("Second").expect("add");
+        writer
+            .write_row(&[CellValue::DateTime("2024-03-25".to_owned())])
+            .expect("write");
+        writer
+            .finish(std::fs::File::create(&path).expect("create"))
+            .expect("finish");
+
+        let mut reader = XlsxReader::open(
+            &path,
+            ReaderOptions {
+                max_decompressed_bytes: 64 << 20,
+                max_rows: 100,
+            },
+        )
+        .expect("open");
+        reader.select("Second").expect("select");
+        reader.next_batch(10).expect("read").expect("a batch")
+    };
+
+    assert_eq!(
+        rows[0][0],
+        CellValue::DateTime("2024-03-25T00:00:00.000Z".to_owned()),
+        "a date on a later sheet lost its number format"
+    );
+}

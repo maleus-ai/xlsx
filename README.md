@@ -133,7 +133,7 @@ The peak does not follow the size of the archive.
 function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
 
 interface XlsxWriteStreamOptions {
-  sheet?: string; // defaults to "Sheet1"
+  sheet?: string; // first sheet's name, defaults to "Sheet1"
   columns?: Array<{ header?: string; type?: "date" }>;
   tempDir?: string; // defaults to the platform temporary directory
   batchSize?: number; // defaults to 1000
@@ -160,6 +160,29 @@ live feed you can start sending to a client early. And do not wait on a
 `Array<string | number | boolean | Date | null/undefined>`, at their column
 index. `null` and `undefined` leaves a blank without shifting neighbours.
 
+### Several sheets
+
+Write an object instead of a row to start a new one. Rows after it go there,
+with its own `columns`:
+
+```js
+Readable.from([
+  ["Ada", 1],
+  ["Grace", 2],
+  { sheet: "Q2", columns: [{ header: "Client" }, { header: "Signed", type: "date" }] },
+  ["Alan", new Date("2024-03-25T00:00:00Z")],
+], { objectMode: true })
+```
+
+The instruction travels in the stream rather than in a method of its own, so a
+whole workbook stays one `pipeline` and the order of the sheets is the order of
+the data that fills them.
+
+Sheets are filled one after another and nothing goes back to one already left.
+A repeated name is refused there and then — Excel compares them without regard
+to case, and the underlying writer would otherwise only notice when the workbook
+is saved, which on an export is after every row has been written.
+
 ### Dates are declared, never guessed
 
 ```js
@@ -180,14 +203,14 @@ serial for it — write it as text if you need to keep it).
 
 ## What is and is not supported
 
-Reads one worksheet, writes one worksheet, and creates new files only — there is
-no open-change-save.
+Reads one worksheet at a time, writes as many as you like, and creates new
+files only — there is no open-change-save.
 
 |                                          | Reading                                | Writing                                    |
 | ---------------------------------------- | -------------------------------------- | ------------------------------------------ |
 | Values, typed                            | yes                                    | yes                                        |
 | Dates                                    | yes                                    | yes, with the format that makes them dates |
-| Multiple sheets                          | read any by name; list all             | one sheet per file                         |
+| Multiple sheets                          | read any by name; list all             | yes, filled one after another              |
 | Formulas                                 | cached result only, never recalculated | **cannot be written at all**               |
 | Macros, charts, images, embedded objects | ignored, not reported                  | not written                                |
 | Cell formatting, widths, merges          | ignored                                | not written                                |

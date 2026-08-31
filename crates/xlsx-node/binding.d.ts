@@ -36,6 +36,14 @@ export declare class XlsxSink {
   /** Open a workbook. Does no I/O beyond preparing the spill directory. */
   constructor(options: JsWriterOptions)
   /**
+   * Start a new sheet. Rows sent after this go to it.
+   *
+   * A repeated name is refused here rather than at the end: the underlying
+   * writer only notices when the workbook is saved, which on an export is
+   * after every row has been written.
+   */
+  addSheet(name: string): Promise<void>
+  /**
    * Append rows. Resolves when they are on the spill file.
    *
    * Rows cross by the batch for the same reason they do coming the other

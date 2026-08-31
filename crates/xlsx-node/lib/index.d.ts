@@ -166,6 +166,22 @@ export interface ColumnDefinition {
   type?: "date";
 }
 
+/**
+ * An instruction, written into the row stream, to start a new sheet.
+ *
+ * Rows sent after it go to the new sheet, with its own `columns`. Sheets are
+ * filled one after another and nothing goes back to one already left.
+ */
+export interface SheetInstruction {
+  /** Name on the new sheet's tab. Must not repeat one already used. */
+  sheet: string;
+  /** Columns for this sheet: their headers and which of them hold dates. */
+  columns?: ColumnDefinition[];
+}
+
+/** What may be written to an {@link XlsxWriteStream}. */
+export type WritableInput = WritableRow | SheetInstruction;
+
 /** How the workbook is set up. */
 export interface XlsxWriteStreamOptions {
   /**
@@ -176,7 +192,7 @@ export interface XlsxWriteStreamOptions {
    */
   sheet?: string;
 
-  /** Columns, in order: their headers and which of them hold dates. */
+  /** Columns of the first sheet, in order. Later sheets bring their own. */
   columns?: ColumnDefinition[];
 
   /**
@@ -202,6 +218,8 @@ export interface XlsxWriteStreamOptions {
  * file as the next one is written, and the archive is assembled from those
  * files when the writable side ends — so nothing is readable before `end()`.
  * It is a stream, but not a transform of rows into bytes as they arrive.
+ *
+ * Write a {@link SheetInstruction} instead of a row to start a new sheet.
  */
 export declare class XlsxWriteStream extends Transform {
   constructor(options?: XlsxWriteStreamOptions);

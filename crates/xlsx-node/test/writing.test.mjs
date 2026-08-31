@@ -241,3 +241,107 @@ test("a full export holds its memory flat", () => {
     `peak RSS was ${Math.round(peakRssKb / 1024)} MB`,
   );
 });
+
+test("an object in the stream starts a new sheet", async () => {
+  const file = output("multi-sheet");
+  await pipeline(
+    Readable.from(
+      [
+        ["Ada", 1],
+        ["Grace", 2],
+        { sheet: "Q2", columns: [{ header: "Client" }, { header: "Signed", type: "date" }] },
+        ["Alan", new Date("2024-03-25T00:00:00Z")],
+      ],
+      { objectMode: true },
+    ),
+    xlsxWriteStream({ sheet: "Q1", columns: [{ header: "Name" }, { header: "N" }] }),
+    fs.createWriteStream(file),
+  );
+
+  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  assert.deepEqual(sheets.map((s) => s.name), ["Q1", "Q2"]);
+
+  assert.deepEqual(await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Q1" })), [
+    ["Name", "N"],
+    ["Ada", 1],
+    ["Grace", 2],
+  ]);
+  assert.deepEqual(await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Q2" })), [
+    ["Client", "Signed"],
+    ["Alan", "2024-03-25T00:00:00.000Z"],
+  ]);
+});
+
+test("each sheet carries its own date columns", async () => {
+  // The declaration is per sheet: column 0 holds dates on the second sheet and
+  // plain text on the first. Getting this wrong would hand "2024-03-25" to the
+  // timestamp parser on the wrong sheet, or write a serial with no format.
+  const file = output("per-sheet-dates");
+  await pipeline(
+    Readable.from(
+      [["2024-03-25"], { sheet: "Dates", columns: [{ type: "date" }] }, ["2024-03-25"]],
+      { objectMode: true },
+    ),
+    xlsxWriteStream({ sheet: "Text" }),
+    fs.createWriteStream(file),
+  );
+
+  assert.deepEqual(await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Text" })), [
+    ["2024-03-25"],
+  ]);
+  assert.deepEqual(await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Dates" })), [
+    ["2024-03-25T00:00:00.000Z"],
+  ]);
+});
+
+test("a repeated sheet name is refused as it is asked for", async () => {
+  await assert.rejects(
+    pipeline(
+      Readable.from([["a"], { sheet: "Q1" }], { objectMode: true }),
+      xlsxWriteStream({ sheet: "Q1" }),
+      fs.createWriteStream(output("repeated-sheet")),
+    ),
+    (error) => {
+      assert.equal(error.code, "INVALID_SHEET_NAME");
+      return true;
+    },
+  );
+});
+
+test("a sheet instruction without a name is refused", async () => {
+  await assert.rejects(
+    pipeline(
+      Readable.from([{ columns: [{ header: "x" }] }], { objectMode: true }),
+      xlsxWriteStream({}),
+      fs.createWriteStream(output("nameless-sheet")),
+    ),
+    (error) => {
+      assert.equal(error.code, "INVALID_OPTION");
+      return true;
+    },
+  );
+});
+
+test("rows keep going to the right sheet across a large export", async () => {
+  // The row counter resets per sheet; if it did not, the second sheet would
+  // start at the first one's height with a block of blanks above it.
+  const file = output("multi-sheet-large");
+  await pipeline(
+    Readable.from(
+      (function* () {
+        for (let r = 0; r < 5_000; r += 1) yield [`a-${r}`];
+        yield { sheet: "B" };
+        for (let r = 0; r < 3_000; r += 1) yield [`b-${r}`];
+      })(),
+      { objectMode: true },
+    ),
+    xlsxWriteStream({ sheet: "A" }),
+    fs.createWriteStream(file),
+  );
+
+  const a = await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "A" }));
+  const b = await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "B" }));
+  assert.equal(a.length, 5_000);
+  assert.equal(b.length, 3_000, "the second sheet must not inherit the first's height");
+  assert.deepEqual(b[0], ["b-0"]);
+});

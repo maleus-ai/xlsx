@@ -426,6 +426,19 @@ impl XlsxSink {
         })
     }
 
+    /// Start a new sheet. Rows sent after this go to it.
+    ///
+    /// A repeated name is refused here rather than at the end: the underlying
+    /// writer only notices when the workbook is saved, which on an export is
+    /// after every row has been written.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn add_sheet(&self, name: String) -> AsyncTask<AddSheetTask> {
+        AsyncTask::new(AddSheetTask {
+            shared: Arc::clone(&self.shared),
+            name,
+        })
+    }
+
     /// Append rows. Resolves when they are on the spill file.
     ///
     /// Rows cross by the batch for the same reason they do coming the other
@@ -483,6 +496,35 @@ fn to_js_write_error(error: WriteError) -> Error {
 
 fn write_closed_error() -> Error {
     Error::from_reason("CLOSED: this writer has been closed")
+}
+
+pub struct AddSheetTask {
+    shared: Arc<WriterShared>,
+    name: String,
+}
+
+impl Task for AddSheetTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        if self.shared.closed.load(Ordering::Acquire) {
+            return Err(write_closed_error());
+        }
+
+        let mut stage = lock_stage(&self.shared.stage);
+        let Stage::Filling(writer) = &mut *stage else {
+            return Err(Error::from_reason(
+                "CLOSED: a sheet cannot be added once the file has started streaming",
+            ));
+        };
+
+        writer.add_sheet(&self.name).map_err(to_js_write_error)
+    }
+
+    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
+        Ok(())
+    }
 }
 
 pub struct WriteRowsTask {

@@ -405,11 +405,21 @@ class XlsxWriteStream extends Transform {
 
   _transform(row, _encoding, callback) {
     if (!Array.isArray(row)) {
+      // A plain object is not a row but an instruction: start a new sheet. It
+      // travels in the stream rather than in a method of its own so that a
+      // whole multi-sheet workbook stays one `pipeline`, and so that the order
+      // of sheets is the order of the data that fills them.
+      if (row !== null && typeof row === "object" && !(row instanceof Date)) {
+        this.#startSheet(row).then(() => callback(), callback);
+        return;
+      }
+
       callback(
         new XlsxError(
           "INVALID_VALUE",
           `row ${this.#row} is ${row === null ? "null" : typeof row}; ` +
-            "each row must be an array of cell values",
+            "each row must be an array of cell values, or an object like " +
+            '{ sheet: "Q2" } to start a new sheet',
         ),
       );
       return;
@@ -434,6 +444,38 @@ class XlsxWriteStream extends Transform {
     }
 
     this.#flushRows().then(() => callback(), callback);
+  }
+
+  /**
+   * Move on to a new sheet.
+   *
+   * Whatever is still in hand goes down first: those rows belong to the sheet
+   * being left, and once the new one is open there is no way back to it.
+   */
+  async #startSheet(instruction) {
+    const { sheet, columns } = instruction;
+
+    if (typeof sheet !== "string" || sheet.length === 0) {
+      throw new XlsxError(
+        "INVALID_OPTION",
+        'a sheet instruction needs a non-empty `sheet` name, as in ' +
+          '{ sheet: "Q2", columns: [...] }',
+      );
+    }
+
+    await this.#flushRows();
+
+    try {
+      await this.#sink.addSheet(sheet);
+    } catch (error) {
+      throw lift(error);
+    }
+
+    const next = readColumns(columns);
+    this.#dateColumns = next.dateColumns;
+    this.#header = next.header === null ? null : next.header.map((n) => n ?? null);
+    // Row numbers in error messages are per sheet, as they are in Excel.
+    this.#row = 0;
   }
 
   _flush(callback) {
