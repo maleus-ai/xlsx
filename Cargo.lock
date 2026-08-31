@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "xlsx-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "calamine",
  "quick-xml",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "xlsx-node"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "napi",
  "napi-build",
