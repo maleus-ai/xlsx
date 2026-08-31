@@ -4,6 +4,8 @@
 // peak RSS is a property of a process.
 //
 //   node scripts/bench.mjs            # the whole table
+//   node scripts/bench.mjs read       # just the reading figures
+//   node scripts/bench.mjs write      # just the writing figures
 //   node scripts/bench.mjs batch      # just the batch-size sweep
 
 import { execFileSync } from "node:child_process";
@@ -72,6 +74,63 @@ function measure({ file, sheet, batchSize, listOnly = false }) {
   return JSON.parse(out);
 }
 
+/** Run one export in a child and bring back its own figures. */
+function measureWrite({ rows }) {
+  const script = `
+    import fs from "node:fs";
+    import { Readable } from "node:stream";
+    import { pipeline } from "node:stream/promises";
+    import { xlsxWriteStream } from ${JSON.stringify(FACADE)};
+
+    const peak = () => {
+      const m = /^VmHWM:\\s+(\\d+) kB$/m.exec(fs.readFileSync("/proc/self/status", "utf8"));
+      return m ? Number(m[1]) * 1024 : null;
+    };
+
+    // Four columns, one of them dates: what the README's table is measuring.
+    const source = Readable.from((function* () {
+      for (let r = 0; r < ${rows}; r += 1) {
+        yield ["row-" + r, r, r % 2 === 0, "2024-03-25T00:00:00.000Z"];
+      }
+    })(), { objectMode: true });
+
+    const started = performance.now();
+    let bytes = 0;
+
+    await pipeline(
+      source,
+      xlsxWriteStream({
+        sheet: "Export",
+        columns: [
+          { header: "label" },
+          { header: "n" },
+          { header: "flag" },
+          { header: "signed", type: "date" },
+        ],
+      }),
+      // Counted rather than written: the figure is the writer's, not the
+      // filesystem's, and a temporary file of its own would muddy the peak.
+      async function (chunks) {
+        for await (const chunk of chunks) bytes += chunk.length;
+      },
+    );
+
+    process.stdout.write(JSON.stringify({
+      rows: ${rows},
+      bytes,
+      elapsedMs: performance.now() - started,
+      peakRss: peak(),
+    }));
+  `;
+
+  const out = execFileSync(
+    process.execPath,
+    ["--input-type=module", "--eval", script],
+    { encoding: "utf8", cwd: REPO_ROOT },
+  );
+  return JSON.parse(out);
+}
+
 const mb = (bytes) => (bytes / 1024 / 1024).toFixed(0);
 const ms = (value) => value.toFixed(0);
 
@@ -94,6 +153,19 @@ function throughput() {
   );
 }
 
+function writing() {
+  // One under the grid's 1 048 576, because the header row takes one of them.
+  console.log("\n## Writing\n");
+  for (const rows of [100_000, 600_000, 1_048_575]) {
+    const result = measureWrite({ rows });
+    console.log(
+      `${String(rows).padStart(9)} rows  ${ms(result.elapsedMs).padStart(7)} ms  ` +
+        `${(result.bytes / 1e6).toFixed(1).padStart(6)} MB out  ` +
+        `${mb(result.peakRss).padStart(5)} MB peak`,
+    );
+  }
+}
+
 function batchSweep() {
   // Two runs each, best kept: the spread between runs is a few per cent, which
   // is the same order as the difference the batch size makes at the top of the
@@ -109,4 +181,5 @@ function batchSweep() {
 
 const what = process.argv[2] ?? "all";
 if (what === "all" || what === "read") throughput();
+if (what === "all" || what === "write") writing();
 if (what === "all" || what === "batch") batchSweep();
