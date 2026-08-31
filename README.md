@@ -264,9 +264,12 @@ nobody needs on data nobody attacked. What is enforced is the grid Excel
 actually defines, 1 048 576 rows by 16 384 columns, reported with the cell that
 crossed it.
 
-What carries over is the memory property, for the same reason: **the size of the
-export does not decide how much memory the process uses.** A report of ten rows
-and a report of a million cost the Rust side the same four megabytes.
+What carries over is the memory property, with one honest qualification. On the
+Rust side it holds outright: **the size of the export does not decide how much
+memory it uses** — a report of ten rows and a report of a million both cost
+about four megabytes. On the Node side it holds for the rows and not for the
+bytes: output chunks accumulate until the export ends, which
+[Measurements](#the-one-thing-that-is-not-flat) sets out with the numbers.
 
 ## The bounds
 
@@ -401,19 +404,50 @@ one holds dates:
 | 600 000       | 7.3 s  | 11.3 MB | 102 MB   |
 | 1 048 575     | 12.5 s | 19.8 MB | 135 MB   |
 
-Ten times the rows for two and a half times the memory above Node's own 43 MB
-floor, and that growth is V8's heap under the row churn rather than the writer
-accumulating: measured on its own, the Rust side holds 4.2 MB at the last line
-of that table.
+That figure is a whole Node process, and most of it is not this package. Taken
+apart at the peak sample, for the 600 000 row export:
 
-For scale on what the stream is doing for you: pulling those same 600 000 rows
-through a plain `for await` and writing nothing peaks at **239 MB**. Writing the
-file costs less than not writing it, because the stream's bounded high-water
-mark throttles the producer and a bare loop does not.
+| Where the 101 MB is                                  |         |
+| ---------------------------------------------------- | ------- |
+| An idle `node` process                               | 40 MB   |
+| Moving 600 000 row arrays through *any* `Transform`  | +50 MB  |
+| Output buffers not yet collected                     | +11 MB  |
+| The Rust writer itself                               | ~0 MB   |
 
-The file comes out in pieces rather than in one allocation — 427 chunks for the
-600 000 row export, the largest 30 KB — which is what makes the readable side
-worth having: a consumer forwards fragments instead of holding a file.
+The middle line is Node's, not ours: the same 600 000 rows through a plain
+`Transform` with no addon involved peak at 89.6 MB. And the last line is
+measured rather than assumed — native memory outside V8 comes to 47.9 MB
+without the addon and 47.7 MB with it, so the writer's own footprint is inside
+the noise. On its own, outside Node, the Rust side holds **4.2 MB** for a sheet
+at Excel's maximum.
+
+### The one thing that is not flat
+
+The third line grows with the size of the **output file**, not with rows, and it
+does not level off:
+
+| Rows      | Output  | `external` at peak |
+| --------- | ------- | ------------------ |
+| 100 000   | 1.8 MB  | 3.5 MB             |
+| 300 000   | 5.4 MB  | 7.1 MB             |
+| 600 000   | 10.8 MB | 12.5 MB            |
+| 1 048 575 | 18.9 MB | 20.6 MB            |
+
+Every chunk handed to JavaScript stays alive until the export ends, whether the
+consumer is a tight loop or a `createWriteStream`. The cause is that napi-rs
+does not call `napi_adjust_external_memory` for a `Buffer`, so V8 is never told
+those bytes exist and feels no pressure to collect them. They are garbage, not a
+leak — forcing a collection brings the 600 000 row peak down from 101 MB to
+69 MB — but nothing forces one on your behalf.
+
+In practice it is bounded by what one worksheet can hold, which for an export of
+ordinary width is tens of megabytes. On a wide sheet it will be more, and if you
+are running against a hard container limit that is the line to watch.
+
+The file does come out in pieces rather than in one allocation — 427 chunks for
+the 600 000 row export, the largest 30 KB — so a consumer forwards fragments
+instead of holding a file. It is the *collection* of those fragments that lags,
+not their production.
 
 ## Contributing
 
