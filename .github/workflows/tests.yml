@@ -119,6 +119,11 @@ jobs:
       - name: The generated binding is in sync
         run: git diff --exit-code -- crates/xlsx-node/binding.js crates/xlsx-node/binding.d.ts
 
+      # The package ships its own copy, and that copy is what npm displays.
+      # It went four days stale once because nothing compared the two.
+      - name: The published README is in sync
+        run: diff -u README.md crates/xlsx-node/README.md
+
   alpine:
     name: node:24-alpine (production target)
     runs-on: blacksmith-4vcpu-ubuntu-2204
