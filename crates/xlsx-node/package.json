@@ -1,7 +1,7 @@
 {
-  "name": "@maleus/xlsx-reader",
+  "name": "@maleus/xlsx",
   "version": "0.2.1",
-  "description": "Streaming XLSX (Excel) reader for Node, in Rust: typed rows, dates as ISO 8601, at bounded memory",
+  "description": "Streaming XLSX (Excel) reader and writer for Node, in Rust: typed rows, dates as ISO 8601, at bounded memory",
   "keywords": [
     "xlsx",
     "excel",
@@ -9,10 +9,12 @@
     "ooxml",
     "spreadsheetml",
     "reader",
+    "writer",
     "parser",
     "stream",
     "streaming",
     "import",
+    "export",
     "rust",
     "native",
     "napi",
@@ -47,8 +49,8 @@
     "node": ">= 20"
   },
   "napi": {
-    "binaryName": "xlsx-reader",
-    "packageName": "@maleus/xlsx-reader",
+    "binaryName": "xlsx",
+    "packageName": "@maleus/xlsx",
     "targets": [
       "x86_64-unknown-linux-gnu",
       "aarch64-unknown-linux-gnu",

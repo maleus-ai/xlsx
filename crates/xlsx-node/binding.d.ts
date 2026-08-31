@@ -24,6 +24,46 @@ export declare class XlsxCursor {
   close(): void
 }
 
+/**
+ * A worksheet being written, one batch of rows at a time.
+ *
+ * Two phases, and the split is a property of the format rather than a choice:
+ * rows go to a spill file as they arrive, and the archive is assembled from
+ * those files at the end. Nothing reaches the consumer until [`Self::next_chunk`]
+ * is called for the first time.
+ */
+export declare class XlsxSink {
+  /** Open a workbook. Does no I/O beyond preparing the spill directory. */
+  constructor(options: JsWriterOptions)
+  /**
+   * Append rows. Resolves when they are on the spill file.
+   *
+   * Rows cross by the batch for the same reason they do coming the other
+   * way: one FFI call per row over a million rows costs more than the work.
+   */
+  writeRows(rows: Array<Array<JsCell>>, dateColumns: Array<number>): Promise<void>
+  /**
+   * Pull the next piece of the file. Resolves to `null` once it is complete.
+   *
+   * The first call starts the assembly on a thread of its own — deliberately
+   * not one of the libuv pool's, which a save lasting seconds would occupy
+   * to the exclusion of every other asynchronous file operation in the
+   * process. What does briefly occupy a pool thread is the wait for each
+   * chunk, measured at about 4 ms across a full sheet.
+   */
+  nextChunk(): Promise<Buffer | null>
+  /**
+   * Abandon the workbook and release the spill file now.
+   *
+   * A consumer that gives up half way through an export — a broken socket on
+   * row three — would otherwise leave the writing thread assembling an
+   * archive nobody will read, and the spill file on disk until it finished.
+   * The sink the thread writes into refuses the next chunk once this is set,
+   * which unwinds the save.
+   */
+  close(): void
+}
+
 /** Options for a listing, which reads no row and so needs no row budget. */
 export interface JsListOptions {
   /** Bytes the archive may expand to. */
@@ -49,6 +89,32 @@ export interface JsSheetInfo {
   name: string
   /** `false` for both `hidden` and `veryHidden` sheets. */
   visible: boolean
+}
+
+/**
+ * How the workbook is set up. Mirrors [`JsReaderOptions`] in shape: plain
+ * data, validated at the boundary.
+ */
+export interface JsWriterOptions {
+  /** Name on the sheet tab. At most 31 characters, free of `[ ] : * ? / \`. */
+  sheetName: string
+  /**
+   * Column indices whose strings are ISO 8601 timestamps.
+   *
+   * Date-ness cannot be guessed from a value: `"2024-03-25"` is a perfectly
+   * good piece of text, and a reader that decided otherwise would turn a
+   * product reference into a day. It cannot be guessed from a JavaScript
+   * `Date` either without calling `toISOString` once per cell across the
+   * boundary, which is the cost this design exists to avoid. So it is
+   * declared once, for the column, and the facade is what turns a `columns`
+   * declaration into this list.
+   */
+  dateColumns: Array<number>
+  /**
+   * Where the row spill files go. `None` uses the platform temporary
+   * directory.
+   */
+  tempDir?: string
 }
 
 /**

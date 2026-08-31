@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import type { Readable } from "node:stream";
+import type { Readable, Transform } from "node:stream";
 
 /** A sheet, as the workbook declares it. */
 export interface SheetInfo {
@@ -33,7 +33,12 @@ export type XlsxErrorCode =
   | "IO"
   | "INVALID_OPTION"
   | "UNSUPPORTED_PLATFORM"
-  | "CLOSED";
+  | "CLOSED"
+  | "INVALID_DATETIME"
+  | "INVALID_VALUE"
+  | "SHEET_LIMIT_EXCEEDED"
+  | "INVALID_SHEET_NAME"
+  | "WRITE_FAILED";
 
 /**
  * A read that was refused, a file that could not be read, or a platform with no
@@ -131,3 +136,96 @@ export declare function xlsxRows(
   path: string,
   options: XlsxRowsOptions,
 ): XlsxRows;
+
+/** A value that can be written to a cell. */
+export type WritableCellValue = string | number | boolean | Date | null | undefined;
+
+/** One row on its way out: values at their column index. */
+export type WritableRow = WritableCellValue[];
+
+/** One column of the sheet being written. */
+export interface ColumnDefinition {
+  /**
+   * Label for this column, written as the first row.
+   *
+   * A header is text in every column, including one declared to hold dates.
+   */
+  header?: string;
+
+  /**
+   * Declare that this column holds timestamps.
+   *
+   * Required for a `Date`, and for an ISO 8601 string that should land as a
+   * date rather than as text. Date-ness is never inferred from a value:
+   * `"2024-03-25"` is a valid product reference as well as a valid day, and a
+   * cell written without a number format reads back as the serial `45376` — a
+   * number where the business expects a date.
+   *
+   * A `Date` in a column without this is refused rather than written wrongly.
+   */
+  type?: "date";
+}
+
+/** How the workbook is set up. */
+export interface XlsxWriteStreamOptions {
+  /**
+   * Name on the sheet tab. Defaults to `Sheet1`.
+   *
+   * At most 31 characters, not empty, and free of `[ ] : * ? / \`. A name
+   * Excel would refuse is refused here rather than trimmed to fit.
+   */
+  sheet?: string;
+
+  /** Columns, in order: their headers and which of them hold dates. */
+  columns?: ColumnDefinition[];
+
+  /**
+   * Where the row spill files go. Defaults to the platform temporary directory.
+   *
+   * Rows are flushed to a temporary file as they arrive, which is what keeps
+   * memory flat — roughly 178 MB of spill for a sheet at Excel's maximum. Set
+   * this when the default directory is small, read-only, or **mounted in
+   * memory** (`tmpfs`, `/dev/shm`, a Kubernetes `emptyDir` with
+   * `medium: Memory`): on a memory-backed mount the spill is RAM again, and it
+   * does not show up in the process's RSS.
+   */
+  tempDir?: string;
+
+  /** Rows per round trip into the native writer. Defaults to 1000. */
+  batchSize?: number;
+}
+
+/**
+ * A worksheet being written: rows in, an `.xlsx` out in pieces.
+ *
+ * **Bytes arrive only once the rows are in.** Each row is flushed to a spill
+ * file as the next one is written, and the archive is assembled from those
+ * files when the writable side ends — so nothing is readable before `end()`.
+ * It is a stream, but not a transform of rows into bytes as they arrive.
+ */
+export declare class XlsxWriteStream extends Transform {
+  constructor(options?: XlsxWriteStreamOptions);
+}
+
+/**
+ * Write a worksheet as a stream of rows.
+ *
+ * Rows are arrays of values at their column index; `null` leaves a cell blank
+ * without shifting its neighbours. Every string is written as a string, never
+ * as a formula — a value beginning with `=` reaches the sheet as those
+ * characters.
+ *
+ * ```ts
+ * await pipeline(
+ *   Readable.from(records, { objectMode: true }),
+ *   xlsxWriteStream({
+ *     sheet: "Export",
+ *     columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+ *   }),
+ *   createWriteStream("export.xlsx"),
+ * );
+ * ```
+ */
+export declare function xlsxWriteStream(
+  options?: XlsxWriteStreamOptions,
+): XlsxWriteStream;

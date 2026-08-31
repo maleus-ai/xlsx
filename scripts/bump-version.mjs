@@ -117,7 +117,7 @@ run("pnpm", ["install", "--lockfile-only", "--silent"]);
 // own binary under NAPI_RS_ENFORCE_VERSION_CHECK — and turns CI red on the
 // release commit, which is the worst moment to be red. A debug build regenerates
 // exactly the same file as a release one, and takes seconds.
-run("pnpm", ["--filter", "@maleus/xlsx-reader", "run", "build:debug"]);
+run("pnpm", ["--filter", "@maleus/xlsx", "run", "build:debug"]);
 
 console.log(
   "\nRead the diff, then open it as a pull request — `main` takes one:\n",

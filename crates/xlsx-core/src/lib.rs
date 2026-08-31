@@ -54,7 +54,9 @@ mod error;
 mod list;
 mod reader;
 mod value;
+mod writer;
 
 pub use error::ReadError;
 pub use reader::{ReaderOptions, SheetInfo, XlsxReader};
 pub use value::CellValue;
+pub use writer::{WriteError, WriterOptions, XlsxWriter, MAX_COLUMNS, MAX_ROWS};
