@@ -10,7 +10,8 @@
 ## Layout
 
 ```
-crates/xlsx-core     the reader (calamine). No napi anywhere in its tree.
+crates/xlsx-core     the reader (calamine) and the writer (rust_xlsxwriter).
+                     No napi anywhere in its tree.
 crates/xlsx-node     the binding (napi-rs)  → @maleus/xlsx-reader
 fixtures/            the fixture generator. Nothing is committed.
 scripts/             benchmarks, the musl build, the Alpine smoke test.
@@ -24,6 +25,16 @@ and what stops product policy from leaking into a reader that cannot import it.
 source and committed, because the publish job assembles the package without
 building it. CI fails if they are out of date, so rebuild and commit them
 whenever the binding's surface changes.
+
+`CellValue` is shared by both halves on purpose. It is the same set of variants
+in either direction, which is what lets `tests/writing.rs` assert the strongest
+property in the repository: read a workbook, write the rows straight back out,
+read the result, and compare. The writer cannot drift from the reader without
+that going red.
+
+Three things do not survive that trip, each pinned by its own test: `Text("")`
+comes back `Empty`, `Error("#N/A")` comes back `Text("#N/A")`, and a date before
+1900 is refused outright because Excel has no serial for it.
 
 ## The loop
 

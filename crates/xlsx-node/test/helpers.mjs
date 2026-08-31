@@ -131,7 +131,7 @@ export function runInChild(body, env = {}) {
   const script = `
     import assert from "node:assert/strict";
     import fs from "node:fs";
-    import { listSheets, xlsxRows, XlsxError } from ${JSON.stringify(path.join(REPO_ROOT, "crates/xlsx-node/lib/index.js"))};
+    import { listSheets, xlsxRows, xlsxWriteStream, XlsxError } from ${JSON.stringify(path.join(REPO_ROOT, "crates/xlsx-node/lib/index.js"))};
 
     const peakRss = () => {
       const m = /^VmHWM:\\s+(\\d+) kB$/m.exec(fs.readFileSync("/proc/self/status", "utf8"));

@@ -1,6 +1,6 @@
 [package]
 name = "xlsx-core"
-description = "Bounded streaming reader for XLSX worksheets"
+description = "Bounded streaming reader and writer for XLSX worksheets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 calamine.workspace = true
+rust_xlsxwriter.workspace = true
 zip.workspace = true
 quick-xml = { version = "0.41", features = ["encoding"] }
 

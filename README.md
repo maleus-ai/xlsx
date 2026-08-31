@@ -4,11 +4,13 @@ Spreadsheets submitted by users are not safe, and well-crafted malicious XLSX
 files can be used to take down backend servers.
 
 This package is FAST, and it reads one worksheet of an `.xlsx` file as a stream
-of typed rows, **at bounded memory**.
+of typed rows, **at bounded memory**. It writes one the same way: rows in, an
+`.xlsx` out in pieces, at a memory ceiling the size of the export does not move.
 
-Written in Rust on [`calamine`](https://github.com/tafia/calamine),
-published to npm as `@maleus/xlsx-reader` through a [napi-rs](https://napi.rs)
-binding.
+Written in Rust on [`calamine`](https://github.com/tafia/calamine) for reading
+and [`rust_xlsxwriter`](https://github.com/jmcnamara/rust_xlsxwriter) for
+writing, published to npm as `@maleus/xlsx-reader` through a
+[napi-rs](https://napi.rs) binding.
 
 ```js
 import { xlsxRows } from "@maleus/xlsx-reader";
@@ -19,6 +21,19 @@ for await (const row of xlsxRows(uploadedFile.path, {
 })) {
   // row: Array<string | number | boolean | null>
 }
+```
+
+```js
+import { xlsxWriteStream } from "@maleus/xlsx-reader";
+
+await pipeline(
+  Readable.from(records, { objectMode: true }),
+  xlsxWriteStream({
+    sheet: "Export",
+    columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+  }),
+  createWriteStream("export.xlsx"),
+);
 ```
 
 ## Install
@@ -136,6 +151,71 @@ does stop the read that follows. When you are going to read rows anyway,
 `xlsxRows(...).sheets()` answers the same question off the open you were about to
 pay for.
 
+### Writing
+
+```ts
+function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
+
+interface XlsxWriteStreamOptions {
+  sheet?: string; // defaults to "Sheet1"
+  columns?: Array<{ header?: string; type?: "date" }>;
+  tempDir?: string; // defaults to the platform temporary directory
+  batchSize?: number; // defaults to 1000
+}
+```
+
+`xlsxWriteStream` returns a `Transform`: rows go in on the writable side in
+object mode, and the `.xlsx` comes out on the readable side as `Buffer` chunks,
+so it drops into a `pipeline` between whatever produces the rows and wherever
+the file is going — a file, a socket, an HTTP response.
+
+**Bytes arrive only once the rows are in.** Each row is flushed to a spill file
+as the next one is written, and the archive is assembled from those files when
+the writable side ends. So nothing is readable before `end()`: it is a stream,
+but not a transform of rows into bytes as they arrive. A caller waiting on a
+first chunk mid-export waits for something that cannot come.
+
+### What a written row looks like
+
+A row is `Array<string | number | boolean | Date | null>`, each value at **its
+column index**. `null` leaves a cell blank without shifting its neighbours,
+which is the placement rule the reader applies coming the other way.
+
+**Dates are declared, never guessed.** A column that holds timestamps says so:
+
+```js
+xlsxWriteStream({
+  columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+});
+```
+
+In an XLSX a date is a serial *plus* a `numFmt`. Write the serial alone and the
+cell reads back as `45376` — a number where the business expects a day, which is
+the same defect this package's reader exists to stop, arriving from the other
+side. So a `Date` in a column that was not declared is **refused** rather than
+written wrongly, and the error says which column to declare.
+
+Inference is not on offer either: `"2024-03-25"` is a perfectly good product
+reference as well as a perfectly good day, and nothing in the value says which
+one you meant.
+
+Strings in a declared date column are parsed as ISO 8601, which means the
+reader's own output feeds straight back in. A UTC offset is refused rather than
+dropped — XLSX stores no timezone, so honouring `+02:00` would shift the value
+and ignoring it would keep the wrong one. Excel counts days from 1900 and has no
+serial for anything earlier; a date before then is refused too, and a caller who
+must keep one writes it as text.
+
+### Every string is written as a string
+
+There is no way to emit a formula. A value that begins with `=`, `+`, `-` or `@`
+— a name someone typed into a form, `=cmd|'/c calc'!A0` included — reaches the
+sheet as those characters, and Excel shows them.
+
+This is a capability the package does not have rather than a default it applies,
+which is the difference that matters: there is no option to turn it off, and no
+path by which a value from an untrusted source becomes something Excel evaluates.
+
 ## What it does
 
 - **Streams one worksheet.** Rows are pulled by the batch and nothing
@@ -148,6 +228,12 @@ pay for.
 - **Reads any sheet**, by name, and lists the sheets of a workbook without
   reading any of them.
 - **Applies two bounds, both mandatory**, on what the file is allowed to cost.
+- **Writes one worksheet**, streaming, with the same memory property: rows spill
+  to a temporary file as they arrive, so the Rust side holds about four
+  megabytes whether the sheet has a thousand rows or Excel's full 1 048 576.
+- **Writes dates as dates**, with the number format that makes them one, and
+  refuses to write a timestamp it cannot place rather than putting some other
+  day in the cell.
 
 ## What it is for
 
@@ -170,6 +256,17 @@ It is also why they are mandatory in the API, with no permissive default. A
 bound nobody set survives review because it is invisible, and is discovered in
 production. A caller who wants no ceiling writes `Number.MAX_SAFE_INTEGER` and
 leaves the trace of that decision in their own source.
+
+Writing has the mirror of that goal and none of that threat model. The data
+comes from the program that owns it, not from a stranger, so there are no
+mandatory budgets on the writing side — mirroring them there would be a ceiling
+nobody needs on data nobody attacked. What is enforced is the grid Excel
+actually defines, 1 048 576 rows by 16 384 columns, reported with the cell that
+crossed it.
+
+What carries over is the memory property, for the same reason: **the size of the
+export does not decide how much memory the process uses.** A report of ten rows
+and a report of a million cost the Rust side the same four megabytes.
 
 ## The bounds
 
@@ -226,15 +323,31 @@ for the file to be read.
 
 ## What it does not do
 
-It reads. It does not write XLSX, read CSV or ODS, recompute formulas, or offer
-a synchronous API. Anything else has to argue its way past that sentence first.
+It reads one worksheet and writes one worksheet. It does not read CSV or ODS,
+recompute formulas, or offer a synchronous API. Anything else has to argue its
+way past that sentence first.
 
-Three things it is worth being explicit about, because the bounds above might
+On the writing side in particular, it does not **edit a workbook that already
+exists** — there is no open-change-save. It creates a new file, and a workbook
+it produces has one sheet, no formulas, no charts, no images, and no formatting
+beyond the number formats that make a date a date. If you need any of those,
+this is the wrong package and `rust_xlsxwriter` underneath it will do all of
+them.
+
+Four things it is worth being explicit about, because the bounds above might
 suggest otherwise:
 
 - **It does not inspect content.** Macros, embedded objects and external links
   are neither examined nor reported. Formula injection in a value that gets
   re-exported somewhere else is the consumer's problem, not this reader's.
+- **Flat memory when writing is bought with disk.** Rows spill to a temporary
+  file rather than being held: roughly 178 MB of uncompressed XML for a sheet at
+  Excel's maximum, deflating to about 20 MB on the way out. It is one unlinked
+  file, released by the kernel when the handle closes. Where the temporary
+  directory is memory-backed — a `tmpfs`, a `/dev/shm`, a Kubernetes `emptyDir`
+  with `medium: Memory` — that spill is RAM again *and does not appear in the
+  process's RSS*, so the reading stays flat while the machine fills up. Point
+  `tempDir` at real disk on those hosts.
 - **The bounds are on memory, not on time.** There is no wall-clock budget: a
   file of legitimate shape, inside its budget, can still take seconds. Cancelling
   a read means destroying the stream, which releases the archive but does not
@@ -277,6 +390,30 @@ Batch size, on 600 000 rows, best of two runs:
 Which is why the default is 1000: the fastest of the five, and 39 MB lighter
 than the one next to it. Below 100 the FFI crossing costs more than the parsing
 does — at one row per call, fifteen times more.
+
+Writing, through the same facade, one process per figure, four columns of which
+one holds dates:
+
+| Rows          | Time   | Output  | Peak RSS |
+| ------------- | ------ | ------- | -------- |
+| 100 000       | 1.0 s  | 1.9 MB  | 78 MB    |
+| 300 000       | 3.3 s  | 5.7 MB  | 96 MB    |
+| 600 000       | 7.3 s  | 11.3 MB | 102 MB   |
+| 1 048 575     | 12.5 s | 19.8 MB | 135 MB   |
+
+Ten times the rows for two and a half times the memory above Node's own 43 MB
+floor, and that growth is V8's heap under the row churn rather than the writer
+accumulating: measured on its own, the Rust side holds 4.2 MB at the last line
+of that table.
+
+For scale on what the stream is doing for you: pulling those same 600 000 rows
+through a plain `for await` and writing nothing peaks at **239 MB**. Writing the
+file costs less than not writing it, because the stream's bounded high-water
+mark throttles the producer and a bare loop does not.
+
+The file comes out in pieces rather than in one allocation — 427 chunks for the
+600 000 row export, the largest 30 KB — which is what makes the readable side
+worth having: a consumer forwards fragments instead of holding a file.
 
 ## Contributing
 

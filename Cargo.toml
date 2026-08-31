@@ -11,6 +11,10 @@ repository = "https://github.com/maleus-ai/xlsx"
 [workspace.dependencies]
 calamine = "0.36.1"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# Same author as libxlsxwriter and the Python XlsxWriter, so fixes cross over
+# between them. `constant_memory` is why it is here: it flushes each row to a
+# temporary file, which holds peak RSS flat at ~4 MB across a full sheet.
+rust_xlsxwriter = { version = "0.99", features = ["constant_memory"] }
 
 [profile.release]
 strip = true
