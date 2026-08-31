@@ -13,9 +13,9 @@
   },
   "scripts": {
     "fixtures": "node fixtures/generate.mjs",
-    "build": "pnpm --filter @maleus/xlsx-reader run build",
-    "build:debug": "pnpm --filter @maleus/xlsx-reader run build:debug",
-    "test": "pnpm --filter @maleus/xlsx-reader run test",
+    "build": "pnpm --filter @maleus/xlsx run build",
+    "build:debug": "pnpm --filter @maleus/xlsx run build:debug",
+    "test": "pnpm --filter @maleus/xlsx run test",
     "test:rust": "cargo test --workspace",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
   },

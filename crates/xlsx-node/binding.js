@@ -70,13 +70,13 @@ function requireNative() {
   } else if (process.platform === 'android') {
     if (process.arch === 'arm64') {
       try {
-        return require('./xlsx-reader.android-arm64.node')
+        return require('./xlsx.android-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-android-arm64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-android-arm64/package.json').version
+        const binding = require('@maleus/xlsx-android-arm64')
+        const bindingPackageVersion = require('@maleus/xlsx-android-arm64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -86,13 +86,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./xlsx-reader.android-arm-eabi.node')
+        return require('./xlsx.android-arm-eabi.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-android-arm-eabi')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-android-arm-eabi/package.json').version
+        const binding = require('@maleus/xlsx-android-arm-eabi')
+        const bindingPackageVersion = require('@maleus/xlsx-android-arm-eabi/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -107,13 +107,13 @@ function requireNative() {
     if (process.arch === 'x64') {
       if ((process.config && process.config.variables && process.config.variables.shlib_suffix === 'dll.a') || (process.config && process.config.variables && process.config.variables.node_target_type === 'shared_library')) {
         try {
-        return require('./xlsx-reader.win32-x64-gnu.node')
+        return require('./xlsx.win32-x64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-win32-x64-gnu')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-win32-x64-gnu/package.json').version
+        const binding = require('@maleus/xlsx-win32-x64-gnu')
+        const bindingPackageVersion = require('@maleus/xlsx-win32-x64-gnu/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -123,13 +123,13 @@ function requireNative() {
       }
       } else {
         try {
-        return require('./xlsx-reader.win32-x64-msvc.node')
+        return require('./xlsx.win32-x64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-win32-x64-msvc')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-win32-x64-msvc/package.json').version
+        const binding = require('@maleus/xlsx-win32-x64-msvc')
+        const bindingPackageVersion = require('@maleus/xlsx-win32-x64-msvc/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -140,13 +140,13 @@ function requireNative() {
       }
     } else if (process.arch === 'ia32') {
       try {
-        return require('./xlsx-reader.win32-ia32-msvc.node')
+        return require('./xlsx.win32-ia32-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-win32-ia32-msvc')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-win32-ia32-msvc/package.json').version
+        const binding = require('@maleus/xlsx-win32-ia32-msvc')
+        const bindingPackageVersion = require('@maleus/xlsx-win32-ia32-msvc/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -156,13 +156,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./xlsx-reader.win32-arm64-msvc.node')
+        return require('./xlsx.win32-arm64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-win32-arm64-msvc')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-win32-arm64-msvc/package.json').version
+        const binding = require('@maleus/xlsx-win32-arm64-msvc')
+        const bindingPackageVersion = require('@maleus/xlsx-win32-arm64-msvc/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -175,13 +175,13 @@ function requireNative() {
     }
   } else if (process.platform === 'darwin') {
     try {
-      return require('./xlsx-reader.darwin-universal.node')
+      return require('./xlsx.darwin-universal.node')
     } catch (e) {
       loadErrors.push(e)
     }
     try {
-      const binding = require('@maleus/xlsx-reader-darwin-universal')
-      const bindingPackageVersion = require('@maleus/xlsx-reader-darwin-universal/package.json').version
+      const binding = require('@maleus/xlsx-darwin-universal')
+      const bindingPackageVersion = require('@maleus/xlsx-darwin-universal/package.json').version
       if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
         throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
       }
@@ -191,13 +191,13 @@ function requireNative() {
     }
     if (process.arch === 'x64') {
       try {
-        return require('./xlsx-reader.darwin-x64.node')
+        return require('./xlsx.darwin-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-darwin-x64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-darwin-x64/package.json').version
+        const binding = require('@maleus/xlsx-darwin-x64')
+        const bindingPackageVersion = require('@maleus/xlsx-darwin-x64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -207,13 +207,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./xlsx-reader.darwin-arm64.node')
+        return require('./xlsx.darwin-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-darwin-arm64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-darwin-arm64/package.json').version
+        const binding = require('@maleus/xlsx-darwin-arm64')
+        const bindingPackageVersion = require('@maleus/xlsx-darwin-arm64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -227,13 +227,13 @@ function requireNative() {
   } else if (process.platform === 'freebsd') {
     if (process.arch === 'x64') {
       try {
-        return require('./xlsx-reader.freebsd-x64.node')
+        return require('./xlsx.freebsd-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-freebsd-x64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-freebsd-x64/package.json').version
+        const binding = require('@maleus/xlsx-freebsd-x64')
+        const bindingPackageVersion = require('@maleus/xlsx-freebsd-x64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -243,13 +243,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm64') {
       try {
-        return require('./xlsx-reader.freebsd-arm64.node')
+        return require('./xlsx.freebsd-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-freebsd-arm64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-freebsd-arm64/package.json').version
+        const binding = require('@maleus/xlsx-freebsd-arm64')
+        const bindingPackageVersion = require('@maleus/xlsx-freebsd-arm64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -264,13 +264,13 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (isMusl()) {
         try {
-          return require('./xlsx-reader.linux-x64-musl.node')
+          return require('./xlsx.linux-x64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-x64-musl')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-x64-musl/package.json').version
+          const binding = require('@maleus/xlsx-linux-x64-musl')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-x64-musl/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -280,13 +280,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./xlsx-reader.linux-x64-gnu.node')
+          return require('./xlsx.linux-x64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-x64-gnu')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-x64-gnu/package.json').version
+          const binding = require('@maleus/xlsx-linux-x64-gnu')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-x64-gnu/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -298,13 +298,13 @@ function requireNative() {
     } else if (process.arch === 'arm64') {
       if (isMusl()) {
         try {
-          return require('./xlsx-reader.linux-arm64-musl.node')
+          return require('./xlsx.linux-arm64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-arm64-musl')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-arm64-musl/package.json').version
+          const binding = require('@maleus/xlsx-linux-arm64-musl')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-arm64-musl/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -314,13 +314,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./xlsx-reader.linux-arm64-gnu.node')
+          return require('./xlsx.linux-arm64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-arm64-gnu')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-arm64-gnu/package.json').version
+          const binding = require('@maleus/xlsx-linux-arm64-gnu')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-arm64-gnu/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -332,13 +332,13 @@ function requireNative() {
     } else if (process.arch === 'arm') {
       if (isMusl()) {
         try {
-          return require('./xlsx-reader.linux-arm-musleabihf.node')
+          return require('./xlsx.linux-arm-musleabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-arm-musleabihf')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-arm-musleabihf/package.json').version
+          const binding = require('@maleus/xlsx-linux-arm-musleabihf')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-arm-musleabihf/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -348,13 +348,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./xlsx-reader.linux-arm-gnueabihf.node')
+          return require('./xlsx.linux-arm-gnueabihf.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-arm-gnueabihf')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-arm-gnueabihf/package.json').version
+          const binding = require('@maleus/xlsx-linux-arm-gnueabihf')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-arm-gnueabihf/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -366,13 +366,13 @@ function requireNative() {
     } else if (process.arch === 'loong64') {
       if (isMusl()) {
         try {
-          return require('./xlsx-reader.linux-loong64-musl.node')
+          return require('./xlsx.linux-loong64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-loong64-musl')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-loong64-musl/package.json').version
+          const binding = require('@maleus/xlsx-linux-loong64-musl')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-loong64-musl/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -382,13 +382,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./xlsx-reader.linux-loong64-gnu.node')
+          return require('./xlsx.linux-loong64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-loong64-gnu')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-loong64-gnu/package.json').version
+          const binding = require('@maleus/xlsx-linux-loong64-gnu')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-loong64-gnu/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -400,13 +400,13 @@ function requireNative() {
     } else if (process.arch === 'riscv64') {
       if (isMusl()) {
         try {
-          return require('./xlsx-reader.linux-riscv64-musl.node')
+          return require('./xlsx.linux-riscv64-musl.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-riscv64-musl')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-riscv64-musl/package.json').version
+          const binding = require('@maleus/xlsx-linux-riscv64-musl')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-riscv64-musl/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -416,13 +416,13 @@ function requireNative() {
         }
       } else {
         try {
-          return require('./xlsx-reader.linux-riscv64-gnu.node')
+          return require('./xlsx.linux-riscv64-gnu.node')
         } catch (e) {
           loadErrors.push(e)
         }
         try {
-          const binding = require('@maleus/xlsx-reader-linux-riscv64-gnu')
-          const bindingPackageVersion = require('@maleus/xlsx-reader-linux-riscv64-gnu/package.json').version
+          const binding = require('@maleus/xlsx-linux-riscv64-gnu')
+          const bindingPackageVersion = require('@maleus/xlsx-linux-riscv64-gnu/package.json').version
           if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
             throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
@@ -433,13 +433,13 @@ function requireNative() {
       }
     } else if (process.arch === 'ppc64') {
       try {
-        return require('./xlsx-reader.linux-ppc64-gnu.node')
+        return require('./xlsx.linux-ppc64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-linux-ppc64-gnu')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-linux-ppc64-gnu/package.json').version
+        const binding = require('@maleus/xlsx-linux-ppc64-gnu')
+        const bindingPackageVersion = require('@maleus/xlsx-linux-ppc64-gnu/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -449,13 +449,13 @@ function requireNative() {
       }
     } else if (process.arch === 's390x') {
       try {
-        return require('./xlsx-reader.linux-s390x-gnu.node')
+        return require('./xlsx.linux-s390x-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-linux-s390x-gnu')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-linux-s390x-gnu/package.json').version
+        const binding = require('@maleus/xlsx-linux-s390x-gnu')
+        const bindingPackageVersion = require('@maleus/xlsx-linux-s390x-gnu/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -469,13 +469,13 @@ function requireNative() {
   } else if (process.platform === 'openharmony') {
     if (process.arch === 'arm64') {
       try {
-        return require('./xlsx-reader.openharmony-arm64.node')
+        return require('./xlsx.openharmony-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-openharmony-arm64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-openharmony-arm64/package.json').version
+        const binding = require('@maleus/xlsx-openharmony-arm64')
+        const bindingPackageVersion = require('@maleus/xlsx-openharmony-arm64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -485,13 +485,13 @@ function requireNative() {
       }
     } else if (process.arch === 'x64') {
       try {
-        return require('./xlsx-reader.openharmony-x64.node')
+        return require('./xlsx.openharmony-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-openharmony-x64')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-openharmony-x64/package.json').version
+        const binding = require('@maleus/xlsx-openharmony-x64')
+        const bindingPackageVersion = require('@maleus/xlsx-openharmony-x64/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -501,13 +501,13 @@ function requireNative() {
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./xlsx-reader.openharmony-arm.node')
+        return require('./xlsx.openharmony-arm.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        const binding = require('@maleus/xlsx-reader-openharmony-arm')
-        const bindingPackageVersion = require('@maleus/xlsx-reader-openharmony-arm/package.json').version
+        const binding = require('@maleus/xlsx-openharmony-arm')
+        const bindingPackageVersion = require('@maleus/xlsx-openharmony-arm/package.json').version
         if (bindingPackageVersion !== '0.2.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -623,10 +623,10 @@ if (!nativeBinding || forceWasi) {
     let candidateError = null
     let candidateFailed = false
     try {
-      candidateError = __napiWasiResolveCandidate('./xlsx-reader.wasi.cjs', false, ["./xlsx-reader.wasm32-wasi.debug.wasm","./xlsx-reader.wasm32-wasi.wasm"])
+      candidateError = __napiWasiResolveCandidate('./xlsx.wasi.cjs', false, ["./xlsx.wasm32-wasi.debug.wasm","./xlsx.wasm32-wasi.wasm"])
       candidateFailed = candidateError !== null
       if (!candidateFailed) {
-        wasiBinding = require('./xlsx-reader.wasi.cjs')
+        wasiBinding = require('./xlsx.wasi.cjs')
         nativeBinding = wasiBinding
         wasiBindingLoaded = true
       }
@@ -643,16 +643,16 @@ if (!nativeBinding || forceWasi) {
     let candidateError = null
     let candidateFailed = false
     try {
-      candidateError = __napiWasiResolveCandidate('@maleus/xlsx-reader-wasm32-wasi', true, undefined)
+      candidateError = __napiWasiResolveCandidate('@maleus/xlsx-wasm32-wasi', true, undefined)
       candidateFailed = candidateError !== null
       if (!candidateFailed) {
         if (process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
-          const bindingPackageVersion = require('@maleus/xlsx-reader-wasm32-wasi/package.json').version
+          const bindingPackageVersion = require('@maleus/xlsx-wasm32-wasi/package.json').version
           if (bindingPackageVersion !== '0.2.1') {
             throw new Error(`WASI binding package version mismatch, expected 0.2.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
           }
         }
-        wasiBinding = require('@maleus/xlsx-reader-wasm32-wasi')
+        wasiBinding = require('@maleus/xlsx-wasm32-wasi')
         nativeBinding = wasiBinding
         wasiBindingLoaded = true
       }

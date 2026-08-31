@@ -12,7 +12,7 @@
 ```
 crates/xlsx-core     the reader (calamine) and the writer (rust_xlsxwriter).
                      No napi anywhere in its tree.
-crates/xlsx-node     the binding (napi-rs)  → @maleus/xlsx-reader
+crates/xlsx-node     the binding (napi-rs)  → @maleus/xlsx
 fixtures/            the fixture generator. Nothing is committed.
 scripts/             benchmarks, the musl build, the Alpine smoke test.
 ```
@@ -100,7 +100,7 @@ a dependency bump could quietly break.
 ## Releasing
 
 Tagging `v*` runs `.github/workflows/release.yml`, which builds the five targets
-and publishes six npm packages: `@maleus/xlsx-reader`, which carries no binary,
+and publishes six npm packages: `@maleus/xlsx`, which carries no binary,
 and one package per platform carrying exactly one. They share a version, which
 `bump-version.mjs` sets before the release and `prepare-npm-packages.mjs` copies
 into the platform manifests.

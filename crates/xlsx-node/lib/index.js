@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * The public surface of `@maleus/xlsx-reader`.
+ * The public surface of `@maleus/xlsx`.
  *
  * Everything below the line — the native cursor, the batch protocol, the way an
  * error code crosses the FFI boundary — is an implementation detail. What a
@@ -58,7 +58,7 @@ function loadNativeBinding() {
     const platform = `${process.platform}-${process.arch}`;
     throw new XlsxError(
       "UNSUPPORTED_PLATFORM",
-      `@maleus/xlsx-reader has no native binding for ${platform}. ` +
+      `@maleus/xlsx has no native binding for ${platform}. ` +
         "Prebuilt binaries are published for linux x64 and arm64 (gnu and musl) " +
         "and macOS arm64. If yours is one of those, the install skipped it: " +
         "remove the lockfile and node_modules and install again.",

@@ -35,7 +35,7 @@ case "$ARCH" in
   *) echo "usage: $0 [x64|arm64]" >&2; exit 1 ;;
 esac
 
-OUT="$ROOT/crates/xlsx-node/xlsx-reader.linux-$ARCH-musl.node"
+OUT="$ROOT/crates/xlsx-node/xlsx.linux-$ARCH-musl.node"
 TARGET_DIR="$ROOT/target-musl-$ARCH"
 
 docker run --rm \
