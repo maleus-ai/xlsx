@@ -275,11 +275,11 @@ baseline.
 
 Four columns of which one holds dates:
 
-| Rows      | Time   | Output  | Peak RSS |
-| --------- | ------ | ------- | -------- |
-| 100 000   | 1.0 s  | 1.9 MB  | 78 MB    |
-| 600 000   | 7.3 s  | 11.3 MB | 102 MB   |
-| 1 048 575 | 12.5 s | 19.8 MB | 135 MB   |
+| Rows      | Time  | Output  | Peak RSS |
+| --------- | ----- | ------- | -------- |
+| 100 000   | 0.6 s | 1.9 MB  | 78 MB    |
+| 600 000   | 3.6 s | 11.3 MB | 100 MB   |
+| 1 048 575 | 6.2 s | 19.8 MB | 134 MB   |
 
 Budget **80–140 MB for an ordinary export, and under 200 MB even when the file
 itself runs to hundreds of megabytes**. Most of that is Node rather than this
