@@ -405,12 +405,12 @@ fn a_workbook_can_hold_several_sheets() {
         .write_row(&[CellValue::Text("first".to_owned())])
         .expect("write");
 
-    writer.add_sheet("Q2").expect("add a sheet");
+    writer.select_sheet("Q2").expect("add a sheet");
     writer
         .write_row(&[CellValue::Text("second".to_owned())])
         .expect("write");
 
-    writer.add_sheet("Q3").expect("add a sheet");
+    writer.select_sheet("Q3").expect("add a sheet");
     writer.write_row(&[CellValue::Number(3.0)]).expect("write");
 
     assert_eq!(writer.sheet_count(), 3);
@@ -456,8 +456,8 @@ fn each_sheet_counts_its_own_rows() {
     }
     assert_eq!(writer.rows_written(), 5);
 
-    writer.add_sheet("Narrow").expect("add a sheet");
-    assert_eq!(writer.rows_written(), 0, "the counter must start again");
+    writer.select_sheet("Narrow").expect("add a sheet");
+    assert_eq!(writer.rows_written(), 0, "a new sheet starts at zero");
 
     writer
         .write_row(&[CellValue::Text("top".to_owned())])
@@ -486,30 +486,6 @@ fn each_sheet_counts_its_own_rows() {
 }
 
 #[test]
-fn a_repeated_sheet_name_is_refused_when_it_is_asked_for() {
-    // The underlying writer only notices at save time, which on an export is
-    // after every row has been written and reports nothing about which sheet
-    // was at fault. Measured: `set_name` returns Ok twice, and `save` then
-    // fails with "Worksheet name 'data' has already been used".
-    let mut writer = XlsxWriter::new(options("Data")).expect("open");
-
-    let error = writer
-        .add_sheet("Data")
-        .expect_err("a repeat, refused up front");
-    assert_eq!(error.code(), "INVALID_SHEET_NAME");
-    assert!(error.to_string().contains("Data"), "{error}");
-
-    // Excel compares them folded, so this is the same name.
-    assert!(writer.add_sheet("DATA").is_err(), "case must not matter");
-    assert!(writer.add_sheet("data").is_err(), "case must not matter");
-
-    // And the refusals left the workbook usable.
-    assert_eq!(writer.sheet_count(), 1);
-    writer.add_sheet("Other").expect("a fresh name still works");
-    assert_eq!(writer.sheet_count(), 2);
-}
-
-#[test]
 fn dates_keep_their_format_on_a_later_sheet() {
     // The formats are registered on the workbook once, before any sheet
     // exists. A sheet added later has to still find them.
@@ -517,7 +493,7 @@ fn dates_keep_their_format_on_a_later_sheet() {
         let path = scratch("dates-on-sheet-two");
         let mut writer = XlsxWriter::new(options("First")).expect("open");
         writer.write_row(&[CellValue::Number(1.0)]).expect("write");
-        writer.add_sheet("Second").expect("add");
+        writer.select_sheet("Second").expect("add");
         writer
             .write_row(&[CellValue::DateTime("2024-03-25".to_owned())])
             .expect("write");

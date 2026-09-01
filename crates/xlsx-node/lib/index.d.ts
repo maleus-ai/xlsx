@@ -167,20 +167,28 @@ export interface ColumnDefinition {
 }
 
 /**
- * An instruction, written into the row stream, to start a new sheet.
+ * A row that names the sheet it goes to.
  *
- * Rows sent after it go to the new sheet, with its own `columns`. Sheets are
- * filled one after another and nothing goes back to one already left.
+ * Nothing is implied by position, so a source that is not sorted by sheet
+ * streams as it is, and reordering the producer cannot silently send rows to
+ * the wrong sheet. A sheet may be left and come back to: each keeps its own
+ * height.
  */
-export interface SheetInstruction {
-  /** Name on the new sheet's tab. Must not repeat one already used. */
+export interface SheetRow {
+  /** Sheet this row belongs to. Created on first sight if it is new. */
   sheet: string;
-  /** Columns for this sheet: their headers and which of them hold dates. */
-  columns?: ColumnDefinition[];
+  /** The row itself: values at their column index. */
+  data: WritableRow;
 }
 
 /** What may be written to an {@link XlsxWriteStream}. */
-export type WritableInput = WritableRow | SheetInstruction;
+export type WritableInput = WritableRow | SheetRow;
+
+/** Columns of one sheet. */
+export interface SheetDefinition {
+  /** Columns, in order: their headers and which of them hold dates. */
+  columns?: ColumnDefinition[];
+}
 
 /** How the workbook is set up. */
 export interface XlsxWriteStreamOptions {
@@ -192,8 +200,19 @@ export interface XlsxWriteStreamOptions {
    */
   sheet?: string;
 
-  /** Columns of the first sheet, in order. Later sheets bring their own. */
+  /** Columns of the default sheet, in order. */
   columns?: ColumnDefinition[];
+
+  /**
+   * Columns of the other sheets, keyed by name.
+   *
+   * Columns are configuration rather than data, so they are declared here
+   * instead of travelling in the stream. A sheet the stream names but this does
+   * not still works: it is created with no header and no date columns.
+   *
+   * Giving columns for the default sheet both here and in `columns` is refused.
+   */
+  sheets?: Record<string, SheetDefinition>;
 
   /**
    * Where the row spill files go. Defaults to the platform temporary directory.
@@ -219,7 +238,8 @@ export interface XlsxWriteStreamOptions {
  * files when the writable side ends — so nothing is readable before `end()`.
  * It is a stream, but not a transform of rows into bytes as they arrive.
  *
- * Write a {@link SheetInstruction} instead of a row to start a new sheet.
+ * A bare array is a row of the default sheet; a {@link SheetRow} names the
+ * sheet it goes to.
  */
 export declare class XlsxWriteStream extends Transform {
   constructor(options?: XlsxWriteStreamOptions);

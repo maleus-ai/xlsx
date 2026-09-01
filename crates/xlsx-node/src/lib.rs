@@ -426,14 +426,14 @@ impl XlsxSink {
         })
     }
 
-    /// Start a new sheet. Rows sent after this go to it.
+    /// Send the rows that follow to `name`, creating the sheet if it is new.
     ///
-    /// A repeated name is refused here rather than at the end: the underlying
-    /// writer only notices when the workbook is saved, which on an export is
-    /// after every row has been written.
+    /// Naming a sheet that already exists returns to it rather than clashing:
+    /// each keeps its own row counter, so a caller can stream a source that is
+    /// not sorted by sheet.
     #[napi(ts_return_type = "Promise<void>")]
-    pub fn add_sheet(&self, name: String) -> AsyncTask<AddSheetTask> {
-        AsyncTask::new(AddSheetTask {
+    pub fn select_sheet(&self, name: String) -> AsyncTask<SelectSheetTask> {
+        AsyncTask::new(SelectSheetTask {
             shared: Arc::clone(&self.shared),
             name,
         })
@@ -498,12 +498,12 @@ fn write_closed_error() -> Error {
     Error::from_reason("CLOSED: this writer has been closed")
 }
 
-pub struct AddSheetTask {
+pub struct SelectSheetTask {
     shared: Arc<WriterShared>,
     name: String,
 }
 
-impl Task for AddSheetTask {
+impl Task for SelectSheetTask {
     type Output = ();
     type JsValue = ();
 
@@ -515,11 +515,11 @@ impl Task for AddSheetTask {
         let mut stage = lock_stage(&self.shared.stage);
         let Stage::Filling(writer) = &mut *stage else {
             return Err(Error::from_reason(
-                "CLOSED: a sheet cannot be added once the file has started streaming",
+                "CLOSED: sheets cannot be selected once the file has started streaming",
             ));
         };
 
-        writer.add_sheet(&self.name).map_err(to_js_write_error)
+        writer.select_sheet(&self.name).map_err(to_js_write_error)
     }
 
     fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {

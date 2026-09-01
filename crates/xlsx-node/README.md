@@ -133,8 +133,9 @@ The peak does not follow the size of the archive.
 function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
 
 interface XlsxWriteStreamOptions {
-  sheet?: string; // first sheet's name, defaults to "Sheet1"
+  sheet?: string; // sheet a bare row goes to, defaults to "Sheet1"
   columns?: Array<{ header?: string; type?: "date" }>;
+  sheets?: Record<string, { columns?: Array<{ header?: string; type?: "date" }> }>;
   tempDir?: string; // defaults to the platform temporary directory
   batchSize?: number; // defaults to 1000
 }
@@ -162,26 +163,35 @@ index. `null` and `undefined` leaves a blank without shifting neighbours.
 
 ### Several sheets
 
-Write an object instead of a row to start a new one. Rows after it go there,
-with its own `columns`:
+Columns are declared in the options; a row names the sheet it goes to:
 
 ```js
-Readable.from([
-  ["Ada", 1],
-  ["Grace", 2],
-  { sheet: "Q2", columns: [{ header: "Client" }, { header: "Signed", type: "date" }] },
-  ["Alan", new Date("2024-03-25T00:00:00Z")],
-], { objectMode: true })
+await pipeline(
+  Readable.from([
+    ["Ada", 1],                                        // the default sheet
+    { sheet: "Q2", data: ["Alan", new Date()] },       // named
+  ], { objectMode: true }),
+  xlsxWriteStream({
+    sheet: "Q1",
+    columns: [{ header: "Client" }, { header: "N" }],
+    sheets: { Q2: { columns: [{ header: "Client" }, { header: "Signed", type: "date" }] } },
+  }),
+  createWriteStream("export.xlsx"),
+);
 ```
 
-The instruction travels in the stream rather than in a method of its own, so a
-whole workbook stays one `pipeline` and the order of the sheets is the order of
-the data that fills them.
+Nothing is implied by position. **The source does not have to be sorted by
+sheet**: a sheet can be left and come back to, because each keeps its own
+height, so a row lands under what *that* sheet already holds. Reordering the
+producer cannot silently send rows to the wrong sheet either — there is no
+current sheet to get wrong.
 
-Sheets are filled one after another and nothing goes back to one already left.
-A repeated name is refused there and then — Excel compares them without regard
-to case, and the underlying writer would otherwise only notice when the workbook
-is saved, which on an export is after every row has been written.
+A sheet the stream names but the options do not is created on first sight, with
+no header and no date columns. Sheet names are compared the way Excel compares
+them, without regard to case.
+
+What still holds is the order *within* a sheet: rows are appended, and nothing
+goes back above one already written. That is what buys the flat memory.
 
 ### Dates are declared, never guessed
 
