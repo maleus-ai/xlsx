@@ -135,7 +135,11 @@ function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
 interface XlsxWriteStreamOptions {
   sheet?: string; // sheet a bare row goes to, defaults to "Sheet1"
   columns?: Array<{ header?: string; type?: "date" }>;
-  sheets?: Record<string, { columns?: Array<{ header?: string; type?: "date" }> }>;
+  sheets?: Record<
+    string,
+    { columns?: Array<{ header?: string; type?: "date" }> }
+  >;
+  maxSheets?: number; // defaults to 256
   tempDir?: string; // defaults to the platform temporary directory
   batchSize?: number; // defaults to 1000
 }
@@ -167,31 +171,29 @@ Columns are declared in the options; a row names the sheet it goes to:
 
 ```js
 await pipeline(
-  Readable.from([
-    ["Ada", 1],                                        // the default sheet
-    { sheet: "Q2", data: ["Alan", new Date()] },       // named
-  ], { objectMode: true }),
+  Readable.from(
+    [
+      ["Ada", 1], // the default sheet
+      { sheet: "Q2", data: ["Alan", new Date()] }, // named
+    ],
+    { objectMode: true },
+  ),
   xlsxWriteStream({
     sheet: "Q1",
     columns: [{ header: "Client" }, { header: "N" }],
-    sheets: { Q2: { columns: [{ header: "Client" }, { header: "Signed", type: "date" }] } },
+    sheets: {
+      Q2: {
+        columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+      },
+    },
   }),
   createWriteStream("export.xlsx"),
 );
 ```
 
-Nothing is implied by position. **The source does not have to be sorted by
-sheet**: a sheet can be left and come back to, because each keeps its own
-height, so a row lands under what *that* sheet already holds. Reordering the
-producer cannot silently send rows to the wrong sheet either — there is no
-current sheet to get wrong.
-
 A sheet the stream names but the options do not is created on first sight, with
 no header and no date columns. Sheet names are compared the way Excel compares
 them, without regard to case.
-
-What still holds is the order *within* a sheet: rows are appended, and nothing
-goes back above one already written. That is what buys the flat memory.
 
 ### Dates are declared, never guessed
 

@@ -703,3 +703,4 @@ module.exports = nativeBinding
 module.exports.XlsxCursor = nativeBinding.XlsxCursor
 module.exports.XlsxSink = nativeBinding.XlsxSink
 module.exports.listSheets = nativeBinding.listSheets
+module.exports.validateSheetName = nativeBinding.validateSheetName

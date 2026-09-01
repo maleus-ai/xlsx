@@ -59,4 +59,6 @@ mod writer;
 pub use error::ReadError;
 pub use reader::{ReaderOptions, SheetInfo, XlsxReader};
 pub use value::CellValue;
-pub use writer::{WriteError, WriterOptions, XlsxWriter, MAX_COLUMNS, MAX_ROWS};
+pub use writer::{
+    validate_sheet_name, WriteError, WriterOptions, XlsxWriter, MAX_COLUMNS, MAX_ROWS, MAX_SHEETS,
+};

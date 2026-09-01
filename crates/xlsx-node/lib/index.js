@@ -39,6 +39,7 @@ const {
   XlsxCursor,
   XlsxSink,
   listSheets: listSheetsNative,
+  validateSheetName,
 } = loadNativeBinding();
 
 /**
@@ -434,6 +435,13 @@ class XlsxWriteStream extends Transform {
         if (definition === null || typeof definition !== "object") {
           throw new XlsxError("INVALID_OPTION", `sheets[${JSON.stringify(name)}] must be an object`);
         }
+        // Checked here rather than at the first row that goes there, so that
+        // one bad name is one error whether or not any data reaches it.
+        try {
+          validateSheetName(name);
+        } catch (error) {
+          throw lift(error);
+        }
         if (fold(name) === this.#defaultSheet && options?.columns !== undefined) {
           throw new XlsxError(
             "INVALID_OPTION",
@@ -449,6 +457,7 @@ class XlsxWriteStream extends Transform {
       this.#sink = new XlsxSink({
         sheetName: defaultName,
         dateColumns: this.#sheets.get(this.#defaultSheet).dateColumns,
+        maxSheets: options?.maxSheets ?? undefined,
         tempDir: options?.tempDir ?? undefined,
       });
     } catch (error) {
@@ -461,7 +470,7 @@ class XlsxWriteStream extends Transform {
   }
 
   #declare(name, { header, dateColumns }) {
-    this.#sheets.set(fold(name), { name, header, dateColumns, rows: 0 });
+    this.#sheets.set(fold(name), { name, header, dateColumns, rows: 0, written: false });
   }
 
   /** The sheet record for `name`, made on first sight if it was not declared. */
@@ -469,7 +478,7 @@ class XlsxWriteStream extends Transform {
     const key = fold(name);
     let record = this.#sheets.get(key);
     if (record === undefined) {
-      record = { name, header: null, dateColumns: [], rows: 0 };
+      record = { name, header: null, dateColumns: [], rows: 0, written: false };
       this.#sheets.set(key, record);
     }
     return record;
@@ -489,7 +498,7 @@ class XlsxWriteStream extends Transform {
       if (typeof value.sheet !== "string" || value.sheet.length === 0) {
         callback(
           new XlsxError(
-            "INVALID_OPTION",
+            "INVALID_VALUE",
             "a row object needs a non-empty `sheet`, as in { sheet: \"Q2\", data: [...] }",
           ),
         );
@@ -547,6 +556,7 @@ class XlsxWriteStream extends Transform {
 
   _flush(callback) {
     this.#flushAll()
+      .then(() => this.#finishDeclaredSheets())
       .then(() => this.#drain())
       .then(() => callback(), callback);
   }
@@ -568,6 +578,37 @@ class XlsxWriteStream extends Transform {
     // workbook whichever sheet was fullest.
     for (const key of [...this.#pending.keys()]) {
       await this.#flushSheet(key);
+    }
+  }
+
+  /**
+   * Give every declared sheet its existence and its header row.
+   *
+   * An export that returns no rows still has columns, and a consumer that reads
+   * them from the first line of the file needs that line to be there. Writing
+   * the header only alongside rows meant an empty export produced an empty
+   * file, and a sheet declared in `sheets` that received nothing produced no
+   * sheet at all.
+   */
+  async #finishDeclaredSheets() {
+    for (const [key, record] of this.#sheets) {
+      if (record.written) {
+        continue;
+      }
+      try {
+        if (this.#selected !== key) {
+          await this.#sink.selectSheet(record.name);
+          this.#selected = key;
+        }
+        if (record.header !== null) {
+          const header = record.header;
+          record.header = null;
+          await this.#sink.writeRows([header], []);
+        }
+        record.written = true;
+      } catch (error) {
+        throw lift(error);
+      }
     }
   }
 
@@ -601,6 +642,7 @@ class XlsxWriteStream extends Transform {
       }
 
       await this.#sink.writeRows(batch, record.dateColumns);
+      record.written = true;
     } catch (error) {
       throw lift(error);
     }

@@ -29,6 +29,7 @@ fn scratch(name: &str) -> PathBuf {
 fn options(sheet: &str) -> WriterOptions {
     WriterOptions {
         sheet_name: sheet.to_owned(),
+        max_sheets: None,
         temp_dir: None,
     }
 }
@@ -371,6 +372,7 @@ fn what_the_reader_produces_the_writer_takes_back() {
 fn a_temporary_directory_that_does_not_exist_is_reported_as_io() {
     let error = XlsxWriter::new(WriterOptions {
         sheet_name: "Data".to_owned(),
+        max_sheets: None,
         temp_dir: Some(PathBuf::from("/nonexistent/for/this/test")),
     })
     .map(|_| ())
@@ -518,4 +520,106 @@ fn dates_keep_their_format_on_a_later_sheet() {
         CellValue::DateTime("2024-03-25T00:00:00.000Z".to_owned()),
         "a date on a later sheet lost its number format"
     );
+}
+
+#[test]
+fn a_refused_sheet_name_leaves_the_workbook_untouched() {
+    // The underlying writer pushes a worksheet on creation and names it after,
+    // so validating the name afterwards left an unnamed sheet in the workbook
+    // that this type had no record of. Every later index was one out, and rows
+    // meant for the sheet a caller asked for landed on the orphan: measured
+    // before the fix as a file holding ["Good", "Sheet2", "Later"] with the row
+    // on `Sheet2` and `Later` empty.
+    let path = scratch("refused-name-no-orphan");
+    let mut writer = XlsxWriter::new(options("Good")).expect("open");
+    writer
+        .write_row(&[CellValue::Text("on Good".to_owned())])
+        .expect("write");
+
+    let error = writer
+        .select_sheet("a/b")
+        .expect_err("Excel refuses that name");
+    assert_eq!(error.code(), "INVALID_SHEET_NAME");
+    assert_eq!(writer.sheet_count(), 1, "the refusal made a sheet anyway");
+
+    // Carrying on after handling the error is what a Result invites, and it
+    // has to work.
+    writer.select_sheet("Later").expect("a valid name");
+    writer
+        .write_row(&[CellValue::Text("meant for Later".to_owned())])
+        .expect("write");
+    writer
+        .finish(std::fs::File::create(&path).expect("create"))
+        .expect("finish");
+
+    let mut reader = XlsxReader::open(
+        &path,
+        ReaderOptions {
+            max_decompressed_bytes: 64 << 20,
+            max_rows: 100,
+        },
+    )
+    .expect("open");
+
+    let names: Vec<String> = reader.sheets().iter().map(|s| s.name.clone()).collect();
+    assert_eq!(
+        names,
+        vec!["Good", "Later"],
+        "an orphan sheet was left behind"
+    );
+
+    reader.select("Later").expect("select");
+    let batch = reader.next_batch(10).expect("read").expect("a batch");
+    assert_eq!(
+        batch[0][0],
+        CellValue::Text("meant for Later".to_owned()),
+        "the row landed on the wrong sheet"
+    );
+}
+
+#[test]
+fn a_control_character_in_a_sheet_name_is_refused() {
+    // It reaches the workbook XML raw, and the file is then not well-formed
+    // XML: measured as the byte 0x01 in xl/workbook.xml, which expat rejects.
+    // Refused here, where the caller can still act, rather than by whoever
+    // opens the file.
+    for name in ["Client\u{1}A", "tab\there", "line\nbreak", "del\u{7f}"] {
+        let error = XlsxWriter::new(options(name))
+            .map(|_| ())
+            .expect_err("a control character must not reach the XML");
+        assert_eq!(error.code(), "INVALID_SHEET_NAME", "for {name:?}");
+    }
+
+    // And on the same path taken later in a workbook's life.
+    let mut writer = XlsxWriter::new(options("Good")).expect("open");
+    assert!(writer.select_sheet("Bad\u{1}").is_err());
+    assert_eq!(writer.sheet_count(), 1);
+}
+
+#[test]
+fn a_workbook_stops_at_its_sheet_ceiling() {
+    // Each sheet holds a temporary file open until the workbook is finished,
+    // and the underlying writer panics rather than errors when it cannot open
+    // one. A caller whose sheet names come from its data would otherwise hand
+    // that panic to whoever supplies the data.
+    let mut writer = XlsxWriter::new(WriterOptions {
+        sheet_name: "S0".to_owned(),
+        max_sheets: Some(4),
+        temp_dir: None,
+    })
+    .expect("open");
+
+    for index in 1..4 {
+        writer
+            .select_sheet(&format!("S{index}"))
+            .unwrap_or_else(|error| panic!("sheet {index} refused: {error}"));
+    }
+    assert_eq!(writer.sheet_count(), 4);
+
+    let error = writer.select_sheet("S4").expect_err("one past the ceiling");
+    assert_eq!(error.code(), "TOO_MANY_SHEETS");
+
+    // Returning to a sheet that exists is not making one, so it still works.
+    writer.select_sheet("S2").expect("a return, not a creation");
+    assert_eq!(writer.sheet_count(), 4);
 }

@@ -119,6 +119,15 @@ export interface JsWriterOptions {
    */
   dateColumns: Array<number>
   /**
+   * Sheets the workbook may hold. Defaults to 256.
+   *
+   * Each sheet keeps a temporary file open until the workbook is finished,
+   * and the underlying writer panics rather than errors when it runs out of
+   * descriptors — so this is a ceiling on a real resource, not on the
+   * format, which has none.
+   */
+  maxSheets?: number
+  /**
    * Where the row spill files go. `None` uses the platform temporary
    * directory.
    */
@@ -133,3 +142,12 @@ export interface JsWriterOptions {
  * the whole archive. The bound still applies — it is applied to what gets read.
  */
 export declare function listSheets(path: string, options: JsListOptions): Promise<Array<JsSheetInfo>>
+
+/**
+ * Check a sheet name the way the writer will, without making a workbook.
+ *
+ * Lets the JavaScript facade refuse a bad name in `sheets` where the caller
+ * wrote it, rather than at the first row that happens to go there — and
+ * without a second copy of the rules to drift from this one.
+ */
+export declare function validateSheetName(name: string): void

@@ -28,7 +28,8 @@ use napi::Error;
 use napi_derive::napi;
 
 use xlsx_core::{
-    CellValue, ReadError, ReaderOptions, WriteError, WriterOptions, XlsxReader, XlsxWriter,
+    validate_sheet_name, CellValue, ReadError, ReaderOptions, WriteError, WriterOptions,
+    XlsxReader, XlsxWriter,
 };
 
 /// One sheet, as the workbook declares it.
@@ -360,9 +361,27 @@ pub struct JsWriterOptions {
     /// declared once, for the column, and the facade is what turns a `columns`
     /// declaration into this list.
     pub date_columns: Vec<u32>,
+    /// Sheets the workbook may hold. Defaults to 256.
+    ///
+    /// Each sheet keeps a temporary file open until the workbook is finished,
+    /// and the underlying writer panics rather than errors when it runs out of
+    /// descriptors — so this is a ceiling on a real resource, not on the
+    /// format, which has none.
+    pub max_sheets: Option<u32>,
+
     /// Where the row spill files go. `None` uses the platform temporary
     /// directory.
     pub temp_dir: Option<String>,
+}
+
+/// Check a sheet name the way the writer will, without making a workbook.
+///
+/// Lets the JavaScript facade refuse a bad name in `sheets` where the caller
+/// wrote it, rather than at the first row that happens to go there — and
+/// without a second copy of the rules to drift from this one.
+#[napi(js_name = "validateSheetName")]
+pub fn js_validate_sheet_name(name: String) -> Result<()> {
+    validate_sheet_name(&name).map_err(to_js_write_error)
 }
 
 /// Bytes held between the writing thread and the consumer.
@@ -414,6 +433,7 @@ impl XlsxSink {
     pub fn new(options: JsWriterOptions) -> Result<Self> {
         let writer = XlsxWriter::new(WriterOptions {
             sheet_name: options.sheet_name,
+            max_sheets: options.max_sheets.map(|n| n as usize),
             temp_dir: options.temp_dir.map(PathBuf::from),
         })
         .map_err(to_js_write_error)?;

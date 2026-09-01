@@ -38,6 +38,7 @@ export type XlsxErrorCode =
   | "INVALID_VALUE"
   | "SHEET_LIMIT_EXCEEDED"
   | "INVALID_SHEET_NAME"
+  | "TOO_MANY_SHEETS"
   | "WRITE_FAILED";
 
 /**
@@ -225,6 +226,17 @@ export interface XlsxWriteStreamOptions {
    * does not show up in the process's RSS.
    */
   tempDir?: string;
+
+  /**
+   * Sheets the workbook may hold. Defaults to 256.
+   *
+   * Each sheet keeps a temporary file open until the workbook is finished, so
+   * this is a ceiling on a real resource rather than on the format, which has
+   * none. It matters when sheet names come from data: without it, a source that
+   * names a new sheet on every row exhausts the process's descriptors, and the
+   * underlying writer panics rather than erroring when it cannot open one.
+   */
+  maxSheets?: number;
 
   /** Rows per round trip into the native writer. Defaults to 1000. */
   batchSize?: number;

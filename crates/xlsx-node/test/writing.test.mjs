@@ -337,7 +337,12 @@ test("naming the sheet a bare row would go to is the same sheet", async () => {
   assert.deepEqual(await collect(xlsxRows(file, PERMISSIVE)), [["bare"], ["named"]]);
 });
 
-test("a row object without a sheet name is refused", async () => {
+test("a row object without a sheet name is a bad value, not a bad option", async () => {
+  // It is an element of the stream, so it is the data that is wrong, not the
+  // configuration. A caller branching on `code` to tell "my config is wrong,
+  // give up" from "this record is bad, report it" must not be misled — and the
+  // neighbouring branch, a value that is neither array nor object, already
+  // says INVALID_VALUE for the same class of problem.
   await assert.rejects(
     pipeline(
       Readable.from([{ data: ["x"] }], { objectMode: true }),
@@ -345,7 +350,82 @@ test("a row object without a sheet name is refused", async () => {
       fs.createWriteStream(output("nameless-sheet")),
     ),
     (error) => {
-      assert.equal(error.code, "INVALID_OPTION");
+      assert.equal(error.code, "INVALID_VALUE");
+      return true;
+    },
+  );
+});
+
+test("an export with no rows still carries its header", async () => {
+  // The common case of a report that found nothing. A consumer reading its
+  // columns from the first line needs that line to exist.
+  const file = output("no-rows");
+  await pipeline(
+    Readable.from([], { objectMode: true }),
+    xlsxWriteStream({ sheet: "Export", columns: [{ header: "Client" }, { header: "N" }] }),
+    fs.createWriteStream(file),
+  );
+
+  assert.deepEqual(await collect(xlsxRows(file, PERMISSIVE)), [["Client", "N"]]);
+});
+
+test("a declared sheet that receives nothing still exists", async () => {
+  const file = output("declared-unused");
+  await pipeline(
+    Readable.from([["a"]], { objectMode: true }),
+    xlsxWriteStream({
+      sheet: "Export",
+      columns: [{ header: "C" }],
+      sheets: { Other: { columns: [{ header: "X" }] } },
+    }),
+    fs.createWriteStream(file),
+  );
+
+  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  assert.deepEqual(sheets.map((s) => s.name), ["Export", "Other"]);
+  assert.deepEqual(await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Other" })), [["X"]]);
+});
+
+test("a bad name in sheets is refused where it is written", async () => {
+  // Not at the first row that happens to go there: one bad name is one error,
+  // whether or not any data reaches it.
+  for (const name of ["a/b", "", "x".repeat(32), "ctrl\u0001"]) {
+    assert.throws(
+      () => xlsxWriteStream({ sheet: "Good", sheets: { [name]: { columns: [] } } }),
+      (error) => {
+        assert.equal(error.code, "INVALID_SHEET_NAME", `for ${JSON.stringify(name)}`);
+        return true;
+      },
+    );
+  }
+});
+
+test("a control character in a sheet name is refused", async () => {
+  // It reaches the workbook XML raw and leaves a file no strict parser opens.
+  assert.throws(
+    () => xlsxWriteStream({ sheet: "Client\u0001A" }),
+    (error) => {
+      assert.equal(error.code, "INVALID_SHEET_NAME");
+      return true;
+    },
+  );
+});
+
+test("a workbook stops at its sheet ceiling", async () => {
+  // Each sheet holds a temporary file open until the workbook is finished.
+  await assert.rejects(
+    pipeline(
+      Readable.from(
+        (function* () {
+          for (let i = 0; i < 10; i += 1) yield { sheet: `S${i}`, data: [i] };
+        })(),
+        { objectMode: true },
+      ),
+      xlsxWriteStream({ sheet: "S0", maxSheets: 4 }),
+      fs.createWriteStream(output("sheet-ceiling")),
+    ),
+    (error) => {
+      assert.equal(error.code, "TOO_MANY_SHEETS");
       return true;
     },
   );
