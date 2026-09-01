@@ -28,7 +28,8 @@ use napi::Error;
 use napi_derive::napi;
 
 use xlsx_core::{
-    CellValue, ReadError, ReaderOptions, WriteError, WriterOptions, XlsxReader, XlsxWriter,
+    validate_sheet_name, CellValue, ReadError, ReaderOptions, WriteError, WriterOptions,
+    XlsxReader, XlsxWriter,
 };
 
 /// One sheet, as the workbook declares it.
@@ -360,9 +361,27 @@ pub struct JsWriterOptions {
     /// declared once, for the column, and the facade is what turns a `columns`
     /// declaration into this list.
     pub date_columns: Vec<u32>,
+    /// Sheets the workbook may hold. Defaults to 256.
+    ///
+    /// Each sheet keeps a temporary file open until the workbook is finished,
+    /// and the underlying writer panics rather than errors when it runs out of
+    /// descriptors — so this is a ceiling on a real resource, not on the
+    /// format, which has none.
+    pub max_sheets: Option<u32>,
+
     /// Where the row spill files go. `None` uses the platform temporary
     /// directory.
     pub temp_dir: Option<String>,
+}
+
+/// Check a sheet name the way the writer will, without making a workbook.
+///
+/// Lets the JavaScript facade refuse a bad name in `sheets` where the caller
+/// wrote it, rather than at the first row that happens to go there — and
+/// without a second copy of the rules to drift from this one.
+#[napi(js_name = "validateSheetName")]
+pub fn js_validate_sheet_name(name: String) -> Result<()> {
+    validate_sheet_name(&name).map_err(to_js_write_error)
 }
 
 /// Bytes held between the writing thread and the consumer.
@@ -414,6 +433,7 @@ impl XlsxSink {
     pub fn new(options: JsWriterOptions) -> Result<Self> {
         let writer = XlsxWriter::new(WriterOptions {
             sheet_name: options.sheet_name,
+            max_sheets: options.max_sheets.map(|n| n as usize),
             temp_dir: options.temp_dir.map(PathBuf::from),
         })
         .map_err(to_js_write_error)?;
@@ -423,6 +443,19 @@ impl XlsxSink {
                 stage: Mutex::new(Stage::Filling(Box::new(writer))),
                 closed: AtomicBool::new(false),
             }),
+        })
+    }
+
+    /// Send the rows that follow to `name`, creating the sheet if it is new.
+    ///
+    /// Naming a sheet that already exists returns to it rather than clashing:
+    /// each keeps its own row counter, so a caller can stream a source that is
+    /// not sorted by sheet.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn select_sheet(&self, name: String) -> AsyncTask<SelectSheetTask> {
+        AsyncTask::new(SelectSheetTask {
+            shared: Arc::clone(&self.shared),
+            name,
         })
     }
 
@@ -483,6 +516,35 @@ fn to_js_write_error(error: WriteError) -> Error {
 
 fn write_closed_error() -> Error {
     Error::from_reason("CLOSED: this writer has been closed")
+}
+
+pub struct SelectSheetTask {
+    shared: Arc<WriterShared>,
+    name: String,
+}
+
+impl Task for SelectSheetTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        if self.shared.closed.load(Ordering::Acquire) {
+            return Err(write_closed_error());
+        }
+
+        let mut stage = lock_stage(&self.shared.stage);
+        let Stage::Filling(writer) = &mut *stage else {
+            return Err(Error::from_reason(
+                "CLOSED: sheets cannot be selected once the file has started streaming",
+            ));
+        };
+
+        writer.select_sheet(&self.name).map_err(to_js_write_error)
+    }
+
+    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
+        Ok(())
+    }
 }
 
 pub struct WriteRowsTask {

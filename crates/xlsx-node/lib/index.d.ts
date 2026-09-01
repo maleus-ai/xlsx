@@ -38,6 +38,7 @@ export type XlsxErrorCode =
   | "INVALID_VALUE"
   | "SHEET_LIMIT_EXCEEDED"
   | "INVALID_SHEET_NAME"
+  | "TOO_MANY_SHEETS"
   | "WRITE_FAILED";
 
 /**
@@ -166,6 +167,30 @@ export interface ColumnDefinition {
   type?: "date";
 }
 
+/**
+ * A row that names the sheet it goes to.
+ *
+ * Nothing is implied by position, so a source that is not sorted by sheet
+ * streams as it is, and reordering the producer cannot silently send rows to
+ * the wrong sheet. A sheet may be left and come back to: each keeps its own
+ * height.
+ */
+export interface SheetRow {
+  /** Sheet this row belongs to. Created on first sight if it is new. */
+  sheet: string;
+  /** The row itself: values at their column index. */
+  data: WritableRow;
+}
+
+/** What may be written to an {@link XlsxWriteStream}. */
+export type WritableInput = WritableRow | SheetRow;
+
+/** Columns of one sheet. */
+export interface SheetDefinition {
+  /** Columns, in order: their headers and which of them hold dates. */
+  columns?: ColumnDefinition[];
+}
+
 /** How the workbook is set up. */
 export interface XlsxWriteStreamOptions {
   /**
@@ -176,8 +201,19 @@ export interface XlsxWriteStreamOptions {
    */
   sheet?: string;
 
-  /** Columns, in order: their headers and which of them hold dates. */
+  /** Columns of the default sheet, in order. */
   columns?: ColumnDefinition[];
+
+  /**
+   * Columns of the other sheets, keyed by name.
+   *
+   * Columns are configuration rather than data, so they are declared here
+   * instead of travelling in the stream. A sheet the stream names but this does
+   * not still works: it is created with no header and no date columns.
+   *
+   * Giving columns for the default sheet both here and in `columns` is refused.
+   */
+  sheets?: Record<string, SheetDefinition>;
 
   /**
    * Where the row spill files go. Defaults to the platform temporary directory.
@@ -191,6 +227,17 @@ export interface XlsxWriteStreamOptions {
    */
   tempDir?: string;
 
+  /**
+   * Sheets the workbook may hold. Defaults to 256.
+   *
+   * Each sheet keeps a temporary file open until the workbook is finished, so
+   * this is a ceiling on a real resource rather than on the format, which has
+   * none. It matters when sheet names come from data: without it, a source that
+   * names a new sheet on every row exhausts the process's descriptors, and the
+   * underlying writer panics rather than erroring when it cannot open one.
+   */
+  maxSheets?: number;
+
   /** Rows per round trip into the native writer. Defaults to 1000. */
   batchSize?: number;
 }
@@ -202,6 +249,9 @@ export interface XlsxWriteStreamOptions {
  * file as the next one is written, and the archive is assembled from those
  * files when the writable side ends — so nothing is readable before `end()`.
  * It is a stream, but not a transform of rows into bytes as they arrive.
+ *
+ * A bare array is a row of the default sheet; a {@link SheetRow} names the
+ * sheet it goes to.
  */
 export declare class XlsxWriteStream extends Transform {
   constructor(options?: XlsxWriteStreamOptions);

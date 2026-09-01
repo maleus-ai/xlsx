@@ -133,8 +133,13 @@ The peak does not follow the size of the archive.
 function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
 
 interface XlsxWriteStreamOptions {
-  sheet?: string; // defaults to "Sheet1"
+  sheet?: string; // sheet a bare row goes to, defaults to "Sheet1"
   columns?: Array<{ header?: string; type?: "date" }>;
+  sheets?: Record<
+    string,
+    { columns?: Array<{ header?: string; type?: "date" }> }
+  >;
+  maxSheets?: number; // defaults to 256
   tempDir?: string; // defaults to the platform temporary directory
   batchSize?: number; // defaults to 1000
 }
@@ -160,6 +165,36 @@ live feed you can start sending to a client early. And do not wait on a
 `Array<string | number | boolean | Date | null/undefined>`, at their column
 index. `null` and `undefined` leaves a blank without shifting neighbours.
 
+### Several sheets
+
+Columns are declared in the options; a row names the sheet it goes to:
+
+```js
+await pipeline(
+  Readable.from(
+    [
+      ["Ada", 1], // the default sheet
+      { sheet: "Q2", data: ["Alan", new Date()] }, // named
+    ],
+    { objectMode: true },
+  ),
+  xlsxWriteStream({
+    sheet: "Q1",
+    columns: [{ header: "Client" }, { header: "N" }],
+    sheets: {
+      Q2: {
+        columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+      },
+    },
+  }),
+  createWriteStream("export.xlsx"),
+);
+```
+
+A sheet the stream names but the options do not is created on first sight, with
+no header and no date columns. Sheet names are compared the way Excel compares
+them, without regard to case.
+
 ### Dates are declared, never guessed
 
 ```js
@@ -180,14 +215,14 @@ serial for it — write it as text if you need to keep it).
 
 ## What is and is not supported
 
-Reads one worksheet, writes one worksheet, and creates new files only — there is
-no open-change-save.
+Reads one worksheet at a time, writes as many as you like, and creates new
+files only — there is no open-change-save.
 
 |                                          | Reading                                | Writing                                    |
 | ---------------------------------------- | -------------------------------------- | ------------------------------------------ |
 | Values, typed                            | yes                                    | yes                                        |
 | Dates                                    | yes                                    | yes, with the format that makes them dates |
-| Multiple sheets                          | read any by name; list all             | one sheet per file                         |
+| Multiple sheets                          | read any by name; list all             | yes, filled one after another              |
 | Formulas                                 | cached result only, never recalculated | **cannot be written at all**               |
 | Macros, charts, images, embedded objects | ignored, not reported                  | not written                                |
 | Cell formatting, widths, merges          | ignored                                | not written                                |
@@ -240,11 +275,11 @@ baseline.
 
 Four columns of which one holds dates:
 
-| Rows      | Time   | Output  | Peak RSS |
-| --------- | ------ | ------- | -------- |
-| 100 000   | 1.0 s  | 1.9 MB  | 78 MB    |
-| 600 000   | 7.3 s  | 11.3 MB | 102 MB   |
-| 1 048 575 | 12.5 s | 19.8 MB | 135 MB   |
+| Rows      | Time  | Output  | Peak RSS |
+| --------- | ----- | ------- | -------- |
+| 100 000   | 0.6 s | 1.9 MB  | 78 MB    |
+| 600 000   | 3.6 s | 11.3 MB | 100 MB   |
+| 1 048 575 | 6.2 s | 19.8 MB | 134 MB   |
 
 Budget **80–140 MB for an ordinary export, and under 200 MB even when the file
 itself runs to hundreds of megabytes**. Most of that is Node rather than this

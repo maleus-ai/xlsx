@@ -39,6 +39,7 @@ const {
   XlsxCursor,
   XlsxSink,
   listSheets: listSheetsNative,
+  validateSheetName,
 } = loadNativeBinding();
 
 /**
@@ -242,24 +243,39 @@ function xlsxRows(path, options) {
 /** Rows per FFI round trip on the writing side. */
 const DEFAULT_WRITE_BATCH_SIZE = 1000;
 
-/** Sheet name used when the caller does not pick one. */
+/**
+ * How many batches' worth of rows may be held across all sheets before the
+ * fullest is sent down. Bounds what a source spread thinly over many sheets
+ * holds, without giving up batching on any one of them.
+ */
+const PENDING_SHEETS_FACTOR = 4;
+
+/** Sheet a bare row goes to when the caller does not name one. */
 const DEFAULT_SHEET_NAME = "Sheet1";
 
 /**
- * Read the `columns` declaration into the two things writing actually needs:
- * the header row, and which columns hold timestamps.
+ * Excel compares sheet names without regard to case, so this is the key two
+ * spellings of one sheet agree on.
+ */
+function fold(name) {
+  return name.toLowerCase();
+}
+
+/**
+ * Read a `columns` declaration into the two things writing needs from it: the
+ * header row, and which columns hold timestamps.
  *
  * Date-ness is declared rather than detected. `"2024-03-25"` is a valid product
  * reference as well as a valid day, and a writer that guessed would turn one
- * into the other silently — the same class of mistake the reader refuses to
- * make when it declines to invent a type for a bare number.
+ * into the other silently — the same class of mistake the reader refuses when
+ * it declines to invent a type for a bare number.
  */
-function readColumns(columns) {
+function readColumns(columns, where) {
   if (columns === undefined) {
     return { header: null, dateColumns: [] };
   }
   if (!Array.isArray(columns)) {
-    throw new XlsxError("INVALID_OPTION", "columns must be an array");
+    throw new XlsxError("INVALID_OPTION", `${where} must be an array`);
   }
 
   const dateColumns = [];
@@ -267,15 +283,12 @@ function readColumns(columns) {
 
   const header = columns.map((column, index) => {
     if (column === null || typeof column !== "object") {
-      throw new XlsxError(
-        "INVALID_OPTION",
-        `columns[${index}] must be an object`,
-      );
+      throw new XlsxError("INVALID_OPTION", `${where}[${index}] must be an object`);
     }
     if (column.type !== undefined && column.type !== "date") {
       throw new XlsxError(
         "INVALID_OPTION",
-        `columns[${index}].type must be "date" if given, got ${JSON.stringify(column.type)}`,
+        `${where}[${index}].type must be "date" if given, got ${JSON.stringify(column.type)}`,
       );
     }
     if (column.type === "date") {
@@ -283,10 +296,7 @@ function readColumns(columns) {
     }
     if (column.header !== undefined) {
       if (typeof column.header !== "string") {
-        throw new XlsxError(
-          "INVALID_OPTION",
-          `columns[${index}].header must be a string`,
-        );
+        throw new XlsxError("INVALID_OPTION", `${where}[${index}].header must be a string`);
       }
       anyHeader = true;
       return column.header;
@@ -294,7 +304,7 @@ function readColumns(columns) {
     return null;
   });
 
-  return { header: anyHeader ? header : null, dateColumns };
+  return { header: anyHeader ? header.map((name) => name ?? null) : null, dateColumns };
 }
 
 /**
@@ -302,11 +312,10 @@ function readColumns(columns) {
  *
  * A `Date` becomes the ISO 8601 spelling the reader also uses, and only in a
  * column declared to hold dates. Elsewhere it is refused rather than written as
- * a number or as text: a `Date` in an undeclared column is a mistake with a
- * one-line fix, and a serial with no format is exactly the wrong-value-in-the-
+ * a number: a serial with no number format is exactly the wrong-value-in-the-
  * database failure this package exists to prevent.
  */
-function toCell(value, row, column, isDateColumn) {
+function toCell(value, sheet, row, column, isDateColumn) {
   if (value === null || value === undefined) {
     return null;
   }
@@ -316,8 +325,8 @@ function toCell(value, row, column, isDateColumn) {
     if (type === "number" && !Number.isFinite(value)) {
       throw new XlsxError(
         "INVALID_VALUE",
-        `row ${row}, column ${column}: ${String(value)} is not a finite number, ` +
-          "and a spreadsheet has no cell for it",
+        `sheet ${JSON.stringify(sheet)}, row ${row}, column ${column}: ` +
+          `${String(value)} is not a finite number, and a spreadsheet has no cell for it`,
       );
     }
     return value;
@@ -327,15 +336,15 @@ function toCell(value, row, column, isDateColumn) {
     if (!isDateColumn) {
       throw new XlsxError(
         "INVALID_VALUE",
-        `row ${row}, column ${column}: a Date needs its column declared as ` +
-          `{ type: "date" }. Without that the cell carries a serial and no ` +
-          "number format, which reads back as a plain number rather than a date",
+        `sheet ${JSON.stringify(sheet)}, row ${row}, column ${column}: a Date needs ` +
+          `its column declared as { type: "date" }. Without that the cell carries a ` +
+          "serial and no number format, which reads back as a plain number rather than a date",
       );
     }
     if (Number.isNaN(value.getTime())) {
       throw new XlsxError(
         "INVALID_VALUE",
-        `row ${row}, column ${column}: an Invalid Date`,
+        `sheet ${JSON.stringify(sheet)}, row ${row}, column ${column}: an Invalid Date`,
       );
     }
     return value.toISOString();
@@ -343,13 +352,24 @@ function toCell(value, row, column, isDateColumn) {
 
   throw new XlsxError(
     "INVALID_VALUE",
-    `row ${row}, column ${column}: ${type} is not a cell value; ` +
-      "pass a string, a finite number, a boolean, a Date, or null",
+    `sheet ${JSON.stringify(sheet)}, row ${row}, column ${column}: ${type} is not a ` +
+      "cell value; pass a string, a finite number, a boolean, a Date, or null",
   );
 }
 
+function requireWriteBatchSize(options) {
+  const value = options?.batchSize ?? DEFAULT_WRITE_BATCH_SIZE;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new XlsxError(
+      "INVALID_OPTION",
+      `batchSize must be a positive integer, got ${String(value)}`,
+    );
+  }
+  return value;
+}
+
 /**
- * A worksheet being written, as a stream.
+ * A worksheet, or several, as a stream.
  *
  * Rows go in on the writable side and the `.xlsx` comes out in pieces on the
  * readable side, so it drops into a `pipeline` between whatever produces the
@@ -359,16 +379,26 @@ function toCell(value, row, column, isDateColumn) {
  * file as the next one is written — that is what keeps memory flat — and the
  * archive is assembled from those files when the writable side ends. So this is
  * a stream, but not a transform of rows into bytes as they arrive: nothing is
- * readable until `end()`. Saying otherwise would set up a caller to wait for a
- * first chunk that cannot come.
+ * readable until `end()`.
  */
 class XlsxWriteStream extends Transform {
   #sink;
-  #dateColumns;
   #batchSize;
-  #pending = [];
-  #header = null;
-  #row = 0;
+  /** Folded name → `{ name, dateColumns, header, rows }`, built on first use. */
+  #sheets = new Map();
+  #defaultSheet;
+  /**
+   * Rows held per sheet, folded name → rows, waiting to make a batch.
+   *
+   * Per sheet rather than one queue because a row may name any sheet at any
+   * time. A single queue would have to be flushed on every change, which on an
+   * interleaved source is one native call per row — measured at 150 s for
+   * 600 000 rows across twelve sheets, against 7 s for the same rows on one.
+   */
+  #pending = new Map();
+  #pendingRows = 0;
+  /** The sheet the native writer currently has selected. */
+  #selected = null;
   #finished = false;
 
   constructor(options) {
@@ -380,14 +410,54 @@ class XlsxWriteStream extends Transform {
       writableHighWaterMark: batchSize,
     });
 
-    const { header, dateColumns } = readColumns(options?.columns);
-    this.#dateColumns = dateColumns;
     this.#batchSize = batchSize;
+
+    const defaultName = options?.sheet ?? DEFAULT_SHEET_NAME;
+    if (typeof defaultName !== "string" || defaultName.length === 0) {
+      throw new XlsxError("INVALID_OPTION", "sheet must be a non-empty string");
+    }
+    this.#defaultSheet = fold(defaultName);
+    this.#declare(defaultName, readColumns(options?.columns, "columns"));
+
+    // Columns for the other sheets are configuration, not data, so they are
+    // declared here rather than travelling in the stream. A sheet the stream
+    // names but this does not still works: it is created with no header and no
+    // date columns.
+    const sheets = options?.sheets;
+    if (sheets !== undefined) {
+      if (sheets === null || typeof sheets !== "object" || Array.isArray(sheets)) {
+        throw new XlsxError(
+          "INVALID_OPTION",
+          "sheets must be an object mapping a sheet name to its definition",
+        );
+      }
+      for (const [name, definition] of Object.entries(sheets)) {
+        if (definition === null || typeof definition !== "object") {
+          throw new XlsxError("INVALID_OPTION", `sheets[${JSON.stringify(name)}] must be an object`);
+        }
+        // Checked here rather than at the first row that goes there, so that
+        // one bad name is one error whether or not any data reaches it.
+        try {
+          validateSheetName(name);
+        } catch (error) {
+          throw lift(error);
+        }
+        if (fold(name) === this.#defaultSheet && options?.columns !== undefined) {
+          throw new XlsxError(
+            "INVALID_OPTION",
+            `columns for ${JSON.stringify(name)} are given twice, once as \`columns\` and ` +
+              "once in `sheets`; keep one",
+          );
+        }
+        this.#declare(name, readColumns(definition.columns, `sheets[${JSON.stringify(name)}].columns`));
+      }
+    }
 
     try {
       this.#sink = new XlsxSink({
-        sheetName: options?.sheet ?? DEFAULT_SHEET_NAME,
-        dateColumns,
+        sheetName: defaultName,
+        dateColumns: this.#sheets.get(this.#defaultSheet).dateColumns,
+        maxSheets: options?.maxSheets ?? undefined,
         tempDir: options?.tempDir ?? undefined,
       });
     } catch (error) {
@@ -396,75 +466,183 @@ class XlsxWriteStream extends Transform {
       // other — the caller branches on `code`, not on where it was raised.
       throw lift(error);
     }
-
-    // Held apart from the rows rather than pushed in with them: a header is
-    // text in every column, including the ones declared to hold dates, and a
-    // column called "Signed" is not a timestamp.
-    this.#header = header === null ? null : header.map((name) => name ?? null);
+    this.#selected = this.#defaultSheet;
   }
 
-  _transform(row, _encoding, callback) {
-    if (!Array.isArray(row)) {
+  #declare(name, { header, dateColumns }) {
+    this.#sheets.set(fold(name), { name, header, dateColumns, rows: 0, written: false });
+  }
+
+  /** The sheet record for `name`, made on first sight if it was not declared. */
+  #sheetFor(name) {
+    const key = fold(name);
+    let record = this.#sheets.get(key);
+    if (record === undefined) {
+      record = { name, header: null, dateColumns: [], rows: 0, written: false };
+      this.#sheets.set(key, record);
+    }
+    return record;
+  }
+
+  _transform(value, _encoding, callback) {
+    let name;
+    let data;
+
+    if (Array.isArray(value)) {
+      name = this.#sheets.get(this.#defaultSheet).name;
+      data = value;
+    } else if (value !== null && typeof value === "object" && Array.isArray(value.data)) {
+      // A row that says where it goes. Nothing is implied by position, so a
+      // source that is not sorted by sheet streams as it is, and reordering the
+      // producer cannot silently send rows to the wrong sheet.
+      if (typeof value.sheet !== "string" || value.sheet.length === 0) {
+        callback(
+          new XlsxError(
+            "INVALID_VALUE",
+            "a row object needs a non-empty `sheet`, as in { sheet: \"Q2\", data: [...] }",
+          ),
+        );
+        return;
+      }
+      name = value.sheet;
+      data = value.data;
+    } else {
       callback(
         new XlsxError(
           "INVALID_VALUE",
-          `row ${this.#row} is ${row === null ? "null" : typeof row}; ` +
-            "each row must be an array of cell values",
+          `${value === null ? "null" : typeof value} is not a row; pass an array of ` +
+            'cell values, or { sheet: "Q2", data: [...] } to name the sheet it goes to',
         ),
       );
       return;
     }
 
+    const record = this.#sheetFor(name);
+    const key = fold(name);
+
     let cells;
     try {
-      cells = row.map((value, column) =>
-        toCell(value, this.#row, column, this.#dateColumns.includes(column)),
+      cells = data.map((cell, column) =>
+        toCell(cell, record.name, record.rows, column, record.dateColumns.includes(column)),
       );
     } catch (error) {
       callback(error);
       return;
     }
+    record.rows += 1;
 
-    this.#row += 1;
-    this.#pending.push(cells);
+    let bucket = this.#pending.get(key);
+    if (bucket === undefined) {
+      bucket = [];
+      this.#pending.set(key, bucket);
+    }
+    bucket.push(cells);
+    this.#pendingRows += 1;
 
-    if (this.#pending.length < this.#batchSize) {
-      callback();
+    // A sheet with a full batch goes down. Otherwise, once enough rows are held
+    // across all sheets, the fullest one goes down — which bounds what is held
+    // when a source spreads thinly over many sheets, without giving up batching
+    // on any of them.
+    if (bucket.length >= this.#batchSize) {
+      this.#flushSheet(key).then(() => callback(), callback);
       return;
     }
-
-    this.#flushRows().then(() => callback(), callback);
+    if (this.#pendingRows >= this.#batchSize * PENDING_SHEETS_FACTOR) {
+      this.#flushSheet(this.#fullestSheet()).then(() => callback(), callback);
+      return;
+    }
+    callback();
   }
 
   _flush(callback) {
-    // Everything still in hand goes down, then the archive is assembled and
-    // pulled through in pieces.
-    this.#flushRows()
+    this.#flushAll()
+      .then(() => this.#finishDeclaredSheets())
       .then(() => this.#drain())
       .then(() => callback(), callback);
   }
 
-  async #flushRows() {
-    // The header goes down first and with no date columns declared, so its
-    // labels are written as the text they are.
-    if (this.#header !== null) {
-      const header = this.#header;
-      this.#header = null;
+  #fullestSheet() {
+    let best = null;
+    let most = -1;
+    for (const [key, rows] of this.#pending) {
+      if (rows.length > most) {
+        most = rows.length;
+        best = key;
+      }
+    }
+    return best;
+  }
+
+  async #flushAll() {
+    // Deterministic order, so a failure part way through leaves the same
+    // workbook whichever sheet was fullest.
+    for (const key of [...this.#pending.keys()]) {
+      await this.#flushSheet(key);
+    }
+  }
+
+  /**
+   * Give every declared sheet its existence and its header row.
+   *
+   * An export that returns no rows still has columns, and a consumer that reads
+   * them from the first line of the file needs that line to be there. Writing
+   * the header only alongside rows meant an empty export produced an empty
+   * file, and a sheet declared in `sheets` that received nothing produced no
+   * sheet at all.
+   */
+  async #finishDeclaredSheets() {
+    for (const [key, record] of this.#sheets) {
+      if (record.written) {
+        continue;
+      }
       try {
-        await this.#sink.writeRows([header], []);
+        if (this.#selected !== key) {
+          await this.#sink.selectSheet(record.name);
+          this.#selected = key;
+        }
+        if (record.header !== null) {
+          const header = record.header;
+          record.header = null;
+          await this.#sink.writeRows([header], []);
+        }
+        record.written = true;
       } catch (error) {
         throw lift(error);
       }
     }
+  }
 
-    if (this.#pending.length === 0) {
+  /** Send one sheet's held rows to it. */
+  async #flushSheet(key) {
+    if (key === null) {
       return;
     }
-    const batch = this.#pending;
-    this.#pending = [];
+    const batch = this.#pending.get(key);
+    if (batch === undefined || batch.length === 0) {
+      return;
+    }
+
+    const record = this.#sheets.get(key);
+    this.#pending.delete(key);
+    this.#pendingRows -= batch.length;
 
     try {
-      await this.#sink.writeRows(batch, this.#dateColumns);
+      if (this.#selected !== key) {
+        await this.#sink.selectSheet(record.name);
+        this.#selected = key;
+      }
+
+      // The header goes down on the sheet's first use, and with no date
+      // columns declared: a label is text in every column, and a column called
+      // "Signed" is not a timestamp.
+      if (record.header !== null) {
+        const header = record.header;
+        record.header = null;
+        await this.#sink.writeRows([header], []);
+      }
+
+      await this.#sink.writeRows(batch, record.dateColumns);
+      record.written = true;
     } catch (error) {
       throw lift(error);
     }
@@ -502,7 +680,7 @@ class XlsxWriteStream extends Transform {
   _destroy(error, callback) {
     // A consumer that walks away — a broken socket half way through an export —
     // must not leave the writing thread assembling an archive nobody will read,
-    // nor the spill file on disk until it has finished doing so.
+    // nor the spill files on disk until it has finished doing so.
     if (!this.#finished) {
       this.#sink.close();
     }
@@ -510,39 +688,29 @@ class XlsxWriteStream extends Transform {
   }
 }
 
-function requireWriteBatchSize(options) {
-  const value = options?.batchSize ?? DEFAULT_WRITE_BATCH_SIZE;
-  if (!Number.isInteger(value) || value < 1) {
-    throw new XlsxError(
-      "INVALID_OPTION",
-      `batchSize must be a positive integer, got ${String(value)}`,
-    );
-  }
-  return value;
-}
-
 /**
- * Write a worksheet as a stream of rows.
+ * Write one or more worksheets as a stream of rows.
  *
- * Rows are arrays of values placed at their column index; `null` leaves a cell
- * blank without shifting its neighbours. Declare `columns` to give the sheet a
- * header row and to say which columns hold dates.
+ * A bare array is a row of the sheet named by `sheet`; `{ sheet, data }` names
+ * the sheet it goes to, so a source that is not sorted by sheet streams as it
+ * is. Values sit at their column index and `null` leaves a blank without
+ * shifting its neighbours.
  *
  * ```js
  * await pipeline(
  *   Readable.from(records, { objectMode: true }),
  *   xlsxWriteStream({
- *     sheet: "Export",
- *     columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
+ *     sheet: "Q1",
+ *     columns: [{ header: "Client" }],
+ *     sheets: { Q2: { columns: [{ header: "Signed", type: "date" }] } },
  *   }),
  *   createWriteStream("export.xlsx"),
  * );
  * ```
  *
- * Peak memory stays near 4 MB across a full sheet, because rows spill to a
- * temporary file rather than being held. That spill is real disk — roughly
- * 178 MB for a sheet of 1 048 576 rows by four columns — so on a host whose
- * temporary directory is memory-backed, point `tempDir` at one that is not.
+ * Peak memory stays flat across the export, because rows spill to temporary
+ * files rather than being held. That spill is real disk — see `tempDir` if the
+ * platform temporary directory is memory-backed.
  */
 function xlsxWriteStream(options) {
   return new XlsxWriteStream(options);

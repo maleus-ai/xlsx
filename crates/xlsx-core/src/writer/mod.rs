@@ -41,11 +41,21 @@
 //! a date from before 1900 writes it as [`CellValue::Text`] and keeps it
 //! exactly, which is better than a cell showing some other day.
 //!
+//! A workbook holds as many sheets as you like.
+//! [`XlsxWriter::select_sheet`] says where the rows that follow go, and a sheet
+//! can be left and come back to: each keeps its own row counter. So a caller
+//! does not have to sort its source by sheet.
+//!
+//! The ordering constraint is per sheet, not per workbook: rows are appended to
+//! whichever sheet is selected, and nothing goes back above one already
+//! written. That is what buys the flat memory.
+//!
 //! ```no_run
 //! use xlsx_core::{CellValue, WriterOptions, XlsxWriter};
 //!
 //! let mut writer = XlsxWriter::new(WriterOptions {
 //!     sheet_name: "Export".to_owned(),
+//!     max_sheets: None,
 //!     temp_dir: None,
 //! })?;
 //!
@@ -78,6 +88,16 @@ pub const MAX_ROWS: u32 = 1_048_576;
 /// Columns in an Excel worksheet. A hard edge of the format.
 pub const MAX_COLUMNS: u32 = 16_384;
 
+/// Sheets a workbook may hold before this crate refuses to make another.
+///
+/// Not a limit of the format, which has none: a limit of the machine. Every
+/// sheet in constant-memory mode holds a temporary file open for the life of
+/// the workbook — measured at 300 descriptors for 300 sheets — and the
+/// underlying writer reaches for one with `unwrap()`, so running out is a
+/// panic rather than an error. A caller whose sheet names come from its data
+/// would otherwise hand that panic to whoever supplies the data.
+pub const MAX_SHEETS: usize = 256;
+
 /// How the workbook is set up.
 #[derive(Debug, Clone)]
 pub struct WriterOptions {
@@ -87,6 +107,12 @@ pub struct WriterOptions {
     /// rather than silently trimmed: a truncated tab name is the sort of thing
     /// nobody notices until a downstream lookup misses.
     pub sheet_name: String,
+
+    /// Sheets the workbook may hold. `None` uses [`MAX_SHEETS`].
+    ///
+    /// Worth raising only deliberately: each sheet costs an open descriptor
+    /// until the workbook is finished.
+    pub max_sheets: Option<usize>,
 
     /// Where the row spill files go.
     ///
@@ -108,7 +134,21 @@ pub struct WriterOptions {
 pub struct XlsxWriter {
     workbook: Workbook,
     formats: Formats,
-    next_row: u32,
+    max_sheets: usize,
+    /// Index of the sheet rows are going to.
+    current: usize,
+    /// Rows written to each sheet, by index.
+    ///
+    /// Per sheet rather than one counter, because a caller may come back to a
+    /// sheet it left: the next row goes under what that sheet already holds,
+    /// not under the tallest sheet in the workbook.
+    rows: Vec<u32>,
+    /// Sheet names in workbook order, folded to lower case.
+    ///
+    /// Excel compares sheet names without regard to case, so this does too —
+    /// which makes `Data` and `DATA` the same sheet rather than a name clash
+    /// the underlying writer would only notice when the workbook is saved.
+    names: Vec<String>,
 }
 
 /// The number formats a date needs to be a date.
@@ -123,7 +163,7 @@ struct Formats {
 }
 
 impl XlsxWriter {
-    /// Open a workbook with one worksheet, in constant-memory mode.
+    /// Open a workbook with its first worksheet, in constant-memory mode.
     pub fn new(options: WriterOptions) -> Result<Self, WriteError> {
         let mut workbook = Workbook::new();
 
@@ -142,6 +182,11 @@ impl XlsxWriter {
         workbook.register_format(&formats.datetime);
         workbook.register_format(&formats.time);
 
+        // Validated before the sheet is made, for the reason `select_sheet`
+        // does the same: a name refused afterwards would leave a worksheet in
+        // the workbook that this type does not know about.
+        validate_sheet_name(&options.sheet_name)?;
+
         let sheet = workbook.add_worksheet_with_constant_memory();
         sheet
             .set_name(&options.sheet_name)
@@ -153,13 +198,69 @@ impl XlsxWriter {
         Ok(Self {
             workbook,
             formats,
-            next_row: 0,
+            max_sheets: options.max_sheets.unwrap_or(MAX_SHEETS).max(1),
+            current: 0,
+            rows: vec![0],
+            names: vec![options.sheet_name.to_lowercase()],
         })
     }
 
-    /// Rows written so far.
+    /// Send the rows that follow to `name`, creating the sheet if it is new.
+    ///
+    /// A sheet can be left and come back to: each keeps its own row counter, so
+    /// the next row lands under what *that* sheet already holds. Which means a
+    /// caller does not have to sort its source by sheet — a row can say where
+    /// it goes and be believed.
+    ///
+    /// What still holds is the order within a sheet: rows are appended, and
+    /// nothing goes back above one already written. That is what buys the flat
+    /// memory, and no arrangement of calls here relaxes it.
+    pub fn select_sheet(&mut self, name: &str) -> Result<(), WriteError> {
+        let folded = name.to_lowercase();
+
+        if let Some(index) = self.names.iter().position(|known| *known == folded) {
+            self.current = index;
+            return Ok(());
+        }
+
+        // Everything that can refuse this name is checked *before* a worksheet
+        // exists, so a refusal leaves the workbook exactly as it was.
+        //
+        // Checking afterwards was a defect, not a style: the underlying writer
+        // pushes the worksheet on creation and names it later, so a rejected
+        // name left an unnamed sheet in the workbook that this type had no
+        // record of. Every later index was then one out, and rows written to
+        // the sheet a caller had asked for landed on the orphan instead.
+        validate_sheet_name(name)?;
+
+        if self.names.len() >= self.max_sheets {
+            return Err(WriteError::TooManySheets {
+                limit: self.max_sheets,
+            });
+        }
+
+        let sheet = self.workbook.add_worksheet_with_constant_memory();
+        sheet
+            .set_name(name)
+            .map_err(|error| WriteError::InvalidSheetName {
+                name: name.to_owned(),
+                detail: error.to_string(),
+            })?;
+
+        self.names.push(folded);
+        self.rows.push(0);
+        self.current = self.names.len() - 1;
+        Ok(())
+    }
+
+    /// Sheets in the workbook.
+    pub fn sheet_count(&self) -> usize {
+        self.names.len()
+    }
+
+    /// Rows written to the sheet currently selected.
     pub fn rows_written(&self) -> u32 {
-        self.next_row
+        self.rows[self.current]
     }
 
     /// Append a row.
@@ -168,7 +269,7 @@ impl XlsxWriter {
     /// the cell blank rather than shifting its neighbours left — the same
     /// placement rule the reader applies coming the other way.
     pub fn write_row(&mut self, cells: &[CellValue]) -> Result<(), WriteError> {
-        let row = self.next_row;
+        let row = self.rows[self.current];
 
         // Checked before anything is written, so a row that cannot fit does not
         // leave half of itself in the sheet.
@@ -192,14 +293,14 @@ impl XlsxWriter {
         let formats = &self.formats;
         let sheet = self
             .workbook
-            .worksheet_from_index(0)
+            .worksheet_from_index(self.current)
             .map_err(WriteError::from)?;
 
         for (column, cell) in cells.iter().enumerate() {
             write_cell(sheet, row, column as u16, cell, formats)?;
         }
 
-        self.next_row += 1;
+        self.rows[self.current] += 1;
         Ok(())
     }
 
@@ -226,6 +327,40 @@ impl XlsxWriter {
     pub fn finish<W: Write + Send>(mut self, sink: W) -> Result<(), WriteError> {
         self.workbook.save_to_writer(sink).map_err(WriteError::from)
     }
+}
+
+/// Check a sheet name against everything that can refuse it.
+///
+/// `rust_xlsxwriter::check_sheet_name` covers Excel's own rules — not blank, at
+/// most 31 characters, none of `[ ] : * ? / \`, no leading or trailing
+/// apostrophe. It does not cover control characters, and those are written into
+/// the workbook XML raw: a name holding `\u{1}` produces a file that is not
+/// well-formed XML at all, which Excel and any strict parser refuse to open.
+/// Measured — a `U+0001` in a sheet name lands as the byte `0x01` in
+/// `xl/workbook.xml`, and expat rejects the document.
+///
+/// So the file is refused here, where the caller can still do something about
+/// it, rather than at whoever opens it.
+pub fn validate_sheet_name(name: &str) -> Result<(), WriteError> {
+    rust_xlsxwriter::utility::check_sheet_name(name).map_err(|error| {
+        WriteError::InvalidSheetName {
+            name: name.to_owned(),
+            detail: error.to_string(),
+        }
+    })?;
+
+    if let Some(bad) = name.chars().find(|c| c.is_control()) {
+        return Err(WriteError::InvalidSheetName {
+            name: name.to_owned(),
+            detail: format!(
+                "it holds the control character U+{:04X}, which goes into the \
+                 workbook XML unescaped and leaves a file no strict parser will open",
+                bad as u32
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 /// Write one cell.

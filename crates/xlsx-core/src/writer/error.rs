@@ -50,6 +50,16 @@ pub enum WriteError {
         detail: String,
     },
 
+    /// The workbook already holds as many sheets as it is allowed.
+    ///
+    /// A limit of the machine rather than of the format: each sheet holds a
+    /// temporary file open until the workbook is finished, and the underlying
+    /// writer panics rather than errors when it cannot open one.
+    TooManySheets {
+        /// Sheets the writer allows.
+        limit: usize,
+    },
+
     /// The output could not be written, or a temporary file could not be made.
     ///
     /// In constant-memory mode each row is flushed to a temporary file, so this
@@ -81,6 +91,7 @@ impl WriteError {
             Self::InvalidDateTime { .. } => "INVALID_DATETIME",
             Self::SheetLimitExceeded { .. } => "SHEET_LIMIT_EXCEEDED",
             Self::InvalidSheetName { .. } => "INVALID_SHEET_NAME",
+            Self::TooManySheets { .. } => "TOO_MANY_SHEETS",
             Self::Io { .. } => "IO",
             Self::Failed { .. } => "WRITE_FAILED",
         }
@@ -106,6 +117,11 @@ impl fmt::Display for WriteError {
             Self::InvalidSheetName { name, detail } => {
                 write!(f, "sheet name {name:?} is not usable: {detail}")
             }
+            Self::TooManySheets { limit } => write!(
+                f,
+                "the workbook already holds {limit} sheets, and each one keeps a \
+                 temporary file open until the workbook is finished"
+            ),
             Self::Io { detail } => write!(f, "cannot write: {detail}"),
             Self::Failed { detail } => write!(f, "cannot build the workbook: {detail}"),
         }
