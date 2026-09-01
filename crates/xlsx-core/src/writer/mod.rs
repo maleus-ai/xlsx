@@ -55,6 +55,7 @@
 //!
 //! let mut writer = XlsxWriter::new(WriterOptions {
 //!     sheet_name: "Export".to_owned(),
+//!     max_sheets: None,
 //!     temp_dir: None,
 //! })?;
 //!
