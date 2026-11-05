@@ -21,11 +21,18 @@ const DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1; // 2026-01-01
 
 export class ZipWriter {
   #fd;
+  #path;
+  #partial;
   #offset = 0;
   #entries = [];
 
+  // The archive only appears at `path` once complete: the test suites treat an
+  // existing fixture as ready, and may read it while another thread or process
+  // is still writing it.
   constructor(path) {
-    this.#fd = fs.openSync(path, "w");
+    this.#path = path;
+    this.#partial = `${path}.${process.pid}.partial`;
+    this.#fd = fs.openSync(this.#partial, "w");
   }
 
   #write(buffer) {
@@ -161,5 +168,6 @@ export class ZipWriter {
     this.#write(eocd);
 
     fs.closeSync(this.#fd);
+    fs.renameSync(this.#partial, this.#path);
   }
 }

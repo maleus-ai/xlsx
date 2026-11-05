@@ -1,6 +1,5 @@
 {
-  "name": "@maleus/xlsx-workspace",
-  "version": "0.1.0",
+  "name": "xlsx-workspace",
   "private": true,
   "description": "Workspace root for the XLSX streaming reader",
   "license": "MIT",
@@ -8,16 +7,14 @@
     "type": "git",
     "url": "git+https://github.com/maleus-ai/xlsx.git"
   },
-  "engines": {
-    "node": ">= 20"
-  },
   "scripts": {
     "fixtures": "node fixtures/generate.mjs",
-    "build": "pnpm --filter @maleus/xlsx run build",
+    "build": "pnpm --filter @maleus/xlsx run build:native",
     "build:debug": "pnpm --filter @maleus/xlsx run build:debug",
-    "test": "pnpm --filter @maleus/xlsx run test",
+    "test": "pnpm --filter @maleus/xlsx run test:native",
+    "ci:native": "pnpm --filter @maleus/xlsx run ci:native",
     "test:rust": "cargo test --workspace",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
   },
-  "packageManager": "pnpm@11.23.0"
+  "packageManager": "pnpm@10.24.0"
 }

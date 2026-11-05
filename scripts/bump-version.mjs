@@ -10,7 +10,8 @@
 // say. Forgetting one of them either turns CI red or publishes a package whose
 // manifest disagrees with the crate it was built from.
 //
-// Run it on a clean tree, read the diff, commit it, and tag.
+// Run it on a clean tree, read the diff, and ship it through a pull request;
+// the release itself is a tag on the public repository's commit that carries it.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -110,7 +111,8 @@ console.log("  crates/xlsx-node/package.json");
 // The lockfiles, which record what the two above say. `--workspace` keeps cargo
 // to the members' own versions rather than refreshing every dependency.
 run("cargo", ["update", "--workspace", "--quiet"]);
-run("pnpm", ["install", "--lockfile-only", "--silent"]);
+// The npm lockfile is the monorepo's, at the workspace root.
+run("pnpm", ["install", "--workspace-root", "--lockfile-only", "--silent"]);
 
 // `binding.js` is generated, committed, and carries the version in fifty-four
 // version checks of its own. Leaving it behind ships a package that refuses its
@@ -119,15 +121,9 @@ run("pnpm", ["install", "--lockfile-only", "--silent"]);
 // exactly the same file as a release one, and takes seconds.
 run("pnpm", ["--filter", "@maleus/xlsx", "run", "build:debug"]);
 
+console.log("\nRead the diff, then ship it through a pull request:\n");
+console.log(`  git commit -am "chore(xlsx): release ${next}"`);
+console.log("  gh stack submit --auto");
 console.log(
-  "\nRead the diff, then open it as a pull request — `main` takes one:\n",
+  `\nOnce merged, export it and tag v${next} on the exported commit (PUBLISHING.md).`,
 );
-console.log(`  git checkout -b chore/release-${next}`);
-console.log(`  git commit -am "chore: release ${next}"`);
-console.log(
-  `  git push -u origin chore/release-${next} && gh pr create --fill`,
-);
-console.log("\nOnce merged, tag what landed on main rather than the branch:");
-console.log("a squash or a merge commit is not the commit you pushed.\n");
-console.log("  git checkout main && git pull");
-console.log(`  git tag v${next} && git push origin v${next}`);

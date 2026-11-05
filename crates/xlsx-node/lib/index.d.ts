@@ -139,7 +139,13 @@ export declare function xlsxRows(
 ): XlsxRows;
 
 /** A value that can be written to a cell. */
-export type WritableCellValue = string | number | boolean | Date | null | undefined;
+export type WritableCellValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | null
+  | undefined;
 
 /** One row on its way out: values at their column index. */
 export type WritableRow = WritableCellValue[];

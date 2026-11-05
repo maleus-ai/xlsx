@@ -101,8 +101,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: matrix.builder == 'napi'
         with:
-          node-version: 24
-          cache: pnpm
+          node-version: 24.22.1
 
       - name: Install build dependencies
         if: matrix.builder == 'napi' && runner.os == 'Linux'
@@ -121,9 +120,13 @@ jobs:
           key: release-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: release-${{ matrix.target }}-cargo-
 
+      # The repository carries no lockfile: it is exported from a monorepo whose
+      # lockfile covers the whole workspace. Hence no `cache: pnpm` above either,
+      # which fails outright without one. The resolution is held back by
+      # `minimumReleaseAge` in pnpm-workspace.yaml.
       - name: Install dependencies
         if: matrix.builder == 'napi'
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build the addon
         if: matrix.builder == 'napi'
@@ -159,10 +162,9 @@ jobs:
       # back to the OIDC exchange.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
-          cache: pnpm
+          node-version: 24.22.1
 
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --no-frozen-lockfile
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

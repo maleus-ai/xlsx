@@ -239,7 +239,6 @@ function xlsxRows(path, options) {
   return new XlsxRows(path, options);
 }
 
-
 /** Rows per FFI round trip on the writing side. */
 const DEFAULT_WRITE_BATCH_SIZE = 1000;
 
@@ -283,7 +282,10 @@ function readColumns(columns, where) {
 
   const header = columns.map((column, index) => {
     if (column === null || typeof column !== "object") {
-      throw new XlsxError("INVALID_OPTION", `${where}[${index}] must be an object`);
+      throw new XlsxError(
+        "INVALID_OPTION",
+        `${where}[${index}] must be an object`,
+      );
     }
     if (column.type !== undefined && column.type !== "date") {
       throw new XlsxError(
@@ -296,7 +298,10 @@ function readColumns(columns, where) {
     }
     if (column.header !== undefined) {
       if (typeof column.header !== "string") {
-        throw new XlsxError("INVALID_OPTION", `${where}[${index}].header must be a string`);
+        throw new XlsxError(
+          "INVALID_OPTION",
+          `${where}[${index}].header must be a string`,
+        );
       }
       anyHeader = true;
       return column.header;
@@ -304,7 +309,10 @@ function readColumns(columns, where) {
     return null;
   });
 
-  return { header: anyHeader ? header.map((name) => name ?? null) : null, dateColumns };
+  return {
+    header: anyHeader ? header.map((name) => name ?? null) : null,
+    dateColumns,
+  };
 }
 
 /**
@@ -425,7 +433,11 @@ class XlsxWriteStream extends Transform {
     // date columns.
     const sheets = options?.sheets;
     if (sheets !== undefined) {
-      if (sheets === null || typeof sheets !== "object" || Array.isArray(sheets)) {
+      if (
+        sheets === null ||
+        typeof sheets !== "object" ||
+        Array.isArray(sheets)
+      ) {
         throw new XlsxError(
           "INVALID_OPTION",
           "sheets must be an object mapping a sheet name to its definition",
@@ -433,7 +445,10 @@ class XlsxWriteStream extends Transform {
       }
       for (const [name, definition] of Object.entries(sheets)) {
         if (definition === null || typeof definition !== "object") {
-          throw new XlsxError("INVALID_OPTION", `sheets[${JSON.stringify(name)}] must be an object`);
+          throw new XlsxError(
+            "INVALID_OPTION",
+            `sheets[${JSON.stringify(name)}] must be an object`,
+          );
         }
         // Checked here rather than at the first row that goes there, so that
         // one bad name is one error whether or not any data reaches it.
@@ -442,14 +457,23 @@ class XlsxWriteStream extends Transform {
         } catch (error) {
           throw lift(error);
         }
-        if (fold(name) === this.#defaultSheet && options?.columns !== undefined) {
+        if (
+          fold(name) === this.#defaultSheet &&
+          options?.columns !== undefined
+        ) {
           throw new XlsxError(
             "INVALID_OPTION",
             `columns for ${JSON.stringify(name)} are given twice, once as \`columns\` and ` +
               "once in `sheets`; keep one",
           );
         }
-        this.#declare(name, readColumns(definition.columns, `sheets[${JSON.stringify(name)}].columns`));
+        this.#declare(
+          name,
+          readColumns(
+            definition.columns,
+            `sheets[${JSON.stringify(name)}].columns`,
+          ),
+        );
       }
     }
 
@@ -470,7 +494,13 @@ class XlsxWriteStream extends Transform {
   }
 
   #declare(name, { header, dateColumns }) {
-    this.#sheets.set(fold(name), { name, header, dateColumns, rows: 0, written: false });
+    this.#sheets.set(fold(name), {
+      name,
+      header,
+      dateColumns,
+      rows: 0,
+      written: false,
+    });
   }
 
   /** The sheet record for `name`, made on first sight if it was not declared. */
@@ -491,7 +521,11 @@ class XlsxWriteStream extends Transform {
     if (Array.isArray(value)) {
       name = this.#sheets.get(this.#defaultSheet).name;
       data = value;
-    } else if (value !== null && typeof value === "object" && Array.isArray(value.data)) {
+    } else if (
+      value !== null &&
+      typeof value === "object" &&
+      Array.isArray(value.data)
+    ) {
       // A row that says where it goes. Nothing is implied by position, so a
       // source that is not sorted by sheet streams as it is, and reordering the
       // producer cannot silently send rows to the wrong sheet.
@@ -499,7 +533,7 @@ class XlsxWriteStream extends Transform {
         callback(
           new XlsxError(
             "INVALID_VALUE",
-            "a row object needs a non-empty `sheet`, as in { sheet: \"Q2\", data: [...] }",
+            'a row object needs a non-empty `sheet`, as in { sheet: "Q2", data: [...] }',
           ),
         );
         return;
@@ -523,7 +557,13 @@ class XlsxWriteStream extends Transform {
     let cells;
     try {
       cells = data.map((cell, column) =>
-        toCell(cell, record.name, record.rows, column, record.dateColumns.includes(column)),
+        toCell(
+          cell,
+          record.name,
+          record.rows,
+          column,
+          record.dateColumns.includes(column),
+        ),
       );
     } catch (error) {
       callback(error);
@@ -724,4 +764,3 @@ module.exports = {
   XlsxRows,
   XlsxWriteStream,
 };
-

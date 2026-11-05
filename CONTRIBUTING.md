@@ -1,8 +1,15 @@
 # Working on this repository
 
+This repository is a mirror. The library is developed in an internal
+repository and exported here, one commit per sync; anything committed here
+directly is overwritten by the next one. Issues and pull requests are welcome
+all the same: a maintainer reviews a pull request here, then carries the change
+over to the internal repository, from where it comes back with the next sync.
+
 ## What you need
 
-- Rust 1.95 (the toolchain CI pins)
+- rustup: `rust-toolchain.toml` pins the toolchain and its components, and
+  rustup installs it on the first `cargo` command
 - Node 24 and pnpm
 - Docker, for the two things that have to run on the real target: the musl build
   and the Alpine smoke test
@@ -14,17 +21,18 @@ crates/xlsx-core     the reader (calamine) and the writer (rust_xlsxwriter).
                      No napi anywhere in its tree.
 crates/xlsx-node     the binding (napi-rs)  → @maleus/xlsx
 fixtures/            the fixture generator. Nothing is committed.
-scripts/             benchmarks, the musl build, the Alpine smoke test.
+scripts/             benchmarks, the musl build, the Alpine smoke test, and
+                     ci-native.sh, every check beyond cargo.
 ```
 
-The core carries no binding, and CI checks it: `cargo tree -p xlsx-core | grep
-napi` must come back empty. That is what keeps the core testable in plain Rust,
+The core carries no binding, and `pnpm run ci:native` checks it:
+`cargo tree -p xlsx-core | grep napi` must come back empty. That is what keeps the core testable in plain Rust,
 and what stops product policy from leaking into a reader that cannot import it.
 
 `crates/xlsx-node/binding.js` and `binding.d.ts` are generated from the Rust
 source and committed, because the publish job assembles the package without
-building it. CI fails if they are out of date, so rebuild and commit them
-whenever the binding's surface changes.
+building it. `pnpm run ci:native` fails if they are out of date, so rebuild and
+commit them whenever the binding's surface changes.
 
 `CellValue` is shared by both halves on purpose. It is the same set of variants
 in either direction, which is what lets `tests/writing.rs` assert the strongest
@@ -45,6 +53,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 pnpm run build && pnpm test       # the Node suite needs a release binary
+pnpm run ci:native                # everything the maintainers' CI runs beyond cargo
 ```
 
 The Node suite is built in release on purpose: it asserts a peak RSS and an
@@ -122,48 +131,14 @@ exist until the release job creates them, so there is nothing for
 them from the directories about to be published is also what keeps them from
 drifting out of step with the release.
 
-### Bumping the version
+Releases are made by the maintainers: the version is bumped in the internal
+repository with `scripts/bump-version.mjs`, which writes it in the four places
+it lives (the Cargo workspace and `Cargo.lock`, the npm manifest and the
+internal repository's lockfile) and
+regenerates `binding.js`, which carries it too. The next sync brings the bump
+here, and the release is a tag on that commit.
 
-The version is written in four files and nothing keeps them in step: the Cargo
-workspace, the npm manifest, and the two lockfiles that record what those say.
-Forgetting one either turns CI red or publishes a package whose manifest
-disagrees with the crate it was built from.
-
-```sh
-git checkout main && git pull
-git checkout -b chore/release-0.2.0
-node scripts/bump-version.mjs minor    # or major, patch, or 1.2.3
-git commit -am "chore: release 0.2.0"
-git push -u origin chore/release-0.2.0 && gh pr create --fill
-```
-
-It refuses to go backwards, because a published npm version cannot be taken
-back — which also means it cannot undo itself. `git checkout` can.
-
-It also rebuilds `binding.js`, which is generated, committed, and carries the
-version in fifty-four checks of its own. That is why the bump takes a few
-seconds rather than none.
-
-Once the pull request is merged, tag **what landed on main**, not the branch: a
-squash or a merge commit is not the commit that was pushed, and the tag is what
-the release job builds from.
-
-```sh
-git checkout main && git pull
-
-# Cheap insurance against tagging a version the tree does not carry.
-node -e "
-  const v = require('./crates/xlsx-node/package.json').version;
-  if (v !== process.argv[1]) { console.error(\`main is at \${v}\`); process.exit(1); }
-" 0.2.0
-
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-`main` requires a pull request; tags do not, so the tag goes straight up. That
-push is what starts the release.
-
-The platform packages are not bumped here: they do not exist until the release
+The platform packages are not bumped: they do not exist until the release
 job creates them, and `prepare-npm-packages.mjs` gives them the manifest's
 version at that point. Committing their names to the manifest looks tidy and is
 not workable: a bump would point them at a version npm does not have yet,
@@ -181,64 +156,3 @@ That attestation is why the publish job runs on a GitHub-hosted runner while
 everything else runs on blacksmith: npm rejects a provenance bundle produced on
 a self-hosted runner, and blacksmith counts as one. Nothing in that job
 compiles, so it costs nothing to move.
-
-A trusted publisher is configured per package, on a page that only exists once
-the package does — which makes the first release a chicken-and-egg. It is
-resolved by publishing that one by hand.
-
-### The first release, by hand
-
-The five binaries still come from CI, because nobody has all five toolchains.
-Running the release workflow without a tag stops after `build`: the `publish` job
-only runs on a tag.
-
-```sh
-# `gh workflow run` says nothing about the run it created, so it has to be looked
-# up: the newest run of that workflow, once the API has got round to listing it.
-gh workflow run release.yml --repo maleus-ai/xlsx
-sleep 5
-RUN=$(gh run list --repo maleus-ai/xlsx --workflow release.yml \
-  --limit 1 --json databaseId -q '.[0].databaseId')
-
-# Prints the run it is following, which is also how you check it picked the one
-# you just dispatched rather than something else that happened to start.
-gh run watch "$RUN" --repo maleus-ai/xlsx
-
-# A finished run does not mean downloadable artifacts: asking too early creates
-# the directories and puts nothing in them, without failing. Wait for all five
-# to be listed.
-until [ "$(gh api "repos/maleus-ai/xlsx/actions/runs/$RUN/artifacts" \
-  -q '.total_count')" = "5" ]; do sleep 5; done
-
-# Passing the run explicitly matters: without it, `gh run download` takes the
-# newest artifact in the repository, whichever run produced it.
-gh run download "$RUN" --repo maleus-ai/xlsx \
-  --dir crates/xlsx-node/artifacts --pattern 'bindings-*'
-
-# It puts each artifact in a directory of its own; the assembly wants them side
-# by side.
-find crates/xlsx-node/artifacts -name '*.node' \
-  -exec mv {} crates/xlsx-node/artifacts/ \;
-
-cd crates/xlsx-node
-pnpm exec napi create-npm-dirs
-pnpm exec napi artifacts
-
-# Last: it writes optionalDependencies into the manifest, which puts it out of
-# step with the lockfile, and `pnpm exec` refuses to run anything after that.
-node ../../scripts/prepare-npm-packages.mjs
-
-# Not `napi pre-publish`: it publishes the platform packages itself unless told
-# not to, and everything else it does has already been done above.
-npm login
-for dir in npm/*/; do npm publish "$dir" --access public; done
-npm publish --access public
-
-# `prepare-npm-packages.mjs` wrote optionalDependencies into the manifest for
-# the publish. That state does not belong in the repository.
-git checkout package.json
-```
-
-Then, on npmjs.com, add a trusted publisher to each of the six packages —
-GitHub Actions, `maleus-ai/xlsx`, workflow `release.yml` — and every release
-after that is a tag and nothing else.

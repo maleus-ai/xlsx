@@ -1,2 +1,7 @@
 packages:
   - "crates/xlsx-node"
+
+# A version is installable one day after it is published. Same delay as the
+# workspace this repository is exported from: there is no lockfile here, so
+# this is what holds back a freshly published, possibly compromised release.
+minimumReleaseAge: 1440
