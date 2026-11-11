@@ -53,8 +53,9 @@ pub enum WriteError {
     /// The workbook already holds as many sheets as it is allowed.
     ///
     /// A limit of the machine rather than of the format: each sheet holds a
-    /// temporary file open until the workbook is finished, and the underlying
-    /// writer panics rather than errors when it cannot open one.
+    /// temporary file open until the workbook is finished. Without the limit,
+    /// running out of descriptors surfaces as [`WriteError::Io`] on the sheet
+    /// that cannot open one.
     TooManySheets {
         /// Sheets the writer allows.
         limit: usize,
@@ -164,6 +165,9 @@ impl From<rust_xlsxwriter::XlsxError> for WriteError {
             },
             XlsxError::IoError(inner) => Self::Io {
                 detail: inner.to_string(),
+            },
+            XlsxError::TempFileError(dir, inner) => Self::Io {
+                detail: format!("cannot create a temporary file in {dir:?}: {inner}"),
             },
             other => Self::Failed {
                 detail: other.to_string(),

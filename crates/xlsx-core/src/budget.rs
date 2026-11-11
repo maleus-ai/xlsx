@@ -12,10 +12,12 @@
 //! sink through a fixed buffer. Nothing is retained, the peak stays flat, and a
 //! hostile archive is refused before a single table is allocated.
 //!
-//! The count is taken on the bytes that actually leave the inflater. The sizes
-//! an archive declares are not evidence: `zip` checks an entry's CRC but never
-//! caps its output at the declared length, so an archive is free to announce 64
-//! bytes for an entry that deploys 64 MB. Only the real expansion is counted.
+//! The count is taken on the bytes that actually leave the inflater, never on
+//! the sizes an archive declares. `zip` fails an entry whose output outgrows its
+//! declared length, so an archive announcing 64 bytes for a part that deploys
+//! 64 MB is refused as corrupt once its output passes 64 bytes. That check only
+//! holds an archive to its own declarations: it is the budget, counting real
+//! output, that bounds an archive whose declarations are honest and enormous.
 
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -111,7 +113,7 @@ pub(crate) fn enforce_decompressed_budget(path: &Path, limit: u64) -> Result<u64
 
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(map_zip_error)?;
-        let name = entry.name().to_owned();
+        let name = entry.name().map_err(map_zip_error)?.into_owned();
 
         loop {
             let read = entry

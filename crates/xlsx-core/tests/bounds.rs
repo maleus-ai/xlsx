@@ -48,7 +48,7 @@ fn every_hostile_archive_is_refused_at_the_part_that_blows_up() {
 }
 
 #[test]
-fn an_archive_that_lies_about_its_sizes_is_refused_on_its_real_expansion() {
+fn an_archive_that_lies_about_its_sizes_is_refused_as_corrupt() {
     let path = fixture("lying-sizes");
 
     // The lie, stated: the central directory announces 64 bytes for a part that
@@ -61,14 +61,14 @@ fn an_archive_that_lies_about_its_sizes_is_refused_on_its_real_expansion() {
         .size();
     assert_eq!(declared, 64);
 
+    // Refused on the output that outgrows the declaration, long before the
+    // budget: the lie itself is the defect, whatever the budget allows.
     let error = XlsxReader::open(&path, budget(EIGHT_MIB, 1_000_000)).expect_err("must refuse");
 
-    assert_eq!(
-        error,
-        ReadError::DecompressedBudgetExceeded {
-            limit: EIGHT_MIB,
-            entry: "xl/sharedStrings.xml".into(),
-        }
+    assert_eq!(error.code(), "CORRUPT", "{error}");
+    assert!(
+        error.to_string().contains("xl/sharedStrings.xml"),
+        "the error must name the part that lied: {error}"
     );
 }
 

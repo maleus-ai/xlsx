@@ -91,17 +91,17 @@ fn the_peak_does_not_follow_the_number_of_rows() {
 #[test]
 fn hostile_archives_are_refused_at_a_flat_peak() {
     let cases = [
-        "bomb-sharedstrings",
-        "bomb-styles",
-        "bomb-rels",
-        "bomb-workbook",
-        "bomb-inline",
-        "lying-sizes",
+        ("bomb-sharedstrings", "DECOMPRESSED_BUDGET_EXCEEDED"),
+        ("bomb-styles", "DECOMPRESSED_BUDGET_EXCEEDED"),
+        ("bomb-rels", "DECOMPRESSED_BUDGET_EXCEEDED"),
+        ("bomb-workbook", "DECOMPRESSED_BUDGET_EXCEEDED"),
+        ("bomb-inline", "DECOMPRESSED_BUDGET_EXCEEDED"),
+        ("lying-sizes", "CORRUPT"),
     ];
 
     let mut peaks = Vec::new();
 
-    for name in cases {
+    for (name, code) in cases {
         fixture(name);
         let report = measure(&[
             &format!("fixtures/out/{name}.xlsx"),
@@ -113,7 +113,7 @@ fn hostile_archives_are_refused_at_a_flat_peak() {
 
         assert_eq!(
             report.text("error").as_deref(),
-            Some("DECOMPRESSED_BUDGET_EXCEEDED"),
+            Some(code),
             "{name}: {report:?}"
         );
 

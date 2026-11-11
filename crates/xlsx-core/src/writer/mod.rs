@@ -92,10 +92,11 @@ pub const MAX_COLUMNS: u32 = 16_384;
 ///
 /// Not a limit of the format, which has none: a limit of the machine. Every
 /// sheet in constant-memory mode holds a temporary file open for the life of
-/// the workbook — measured at 300 descriptors for 300 sheets — and the
-/// underlying writer reaches for one with `unwrap()`, so running out is a
-/// panic rather than an error. A caller whose sheet names come from its data
-/// would otherwise hand that panic to whoever supplies the data.
+/// the workbook — measured at 300 descriptors for 300 sheets. A caller whose
+/// sheet names come from its data would otherwise let whoever supplies the data
+/// decide how many descriptors the process spends: past the process limit, the
+/// next sheet fails with [`WriteError::Io`], and so does any other file or
+/// socket the process opens until the workbook is dropped.
 pub const MAX_SHEETS: usize = 256;
 
 /// How the workbook is set up.
@@ -187,7 +188,7 @@ impl XlsxWriter {
         // the workbook that this type does not know about.
         validate_sheet_name(&options.sheet_name)?;
 
-        let sheet = workbook.add_worksheet_with_constant_memory();
+        let sheet = workbook.add_worksheet_with_constant_memory()?;
         sheet
             .set_name(&options.sheet_name)
             .map_err(|error| WriteError::InvalidSheetName {
@@ -239,7 +240,7 @@ impl XlsxWriter {
             });
         }
 
-        let sheet = self.workbook.add_worksheet_with_constant_memory();
+        let sheet = self.workbook.add_worksheet_with_constant_memory()?;
         sheet
             .set_name(name)
             .map_err(|error| WriteError::InvalidSheetName {

@@ -240,7 +240,7 @@ export interface XlsxWriteStreamOptions {
    * this is a ceiling on a real resource rather than on the format, which has
    * none. It matters when sheet names come from data: without it, a source that
    * names a new sheet on every row exhausts the process's descriptors, and the
-   * underlying writer panics rather than erroring when it cannot open one.
+   * stream fails with `IO` when it cannot open one.
    */
   maxSheets?: number;
 

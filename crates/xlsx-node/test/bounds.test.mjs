@@ -20,15 +20,20 @@ test("every hostile archive is refused at the part that blows up", async () => {
   // reader runs before it hands back its first row — which is the whole reason
   // the bounds live inside the reader rather than above it.
   const cases = [
-    ["bomb-sharedstrings", "xl/sharedStrings.xml"],
-    ["bomb-styles", "xl/styles.xml"],
-    ["bomb-rels", "xl/_rels/workbook.xml.rels"],
-    ["bomb-workbook", "xl/workbook.xml"],
-    ["bomb-inline", "xl/worksheets/sheet1.xml"],
-    ["lying-sizes", "xl/sharedStrings.xml"],
+    [
+      "bomb-sharedstrings",
+      "xl/sharedStrings.xml",
+      "DECOMPRESSED_BUDGET_EXCEEDED",
+    ],
+    ["bomb-styles", "xl/styles.xml", "DECOMPRESSED_BUDGET_EXCEEDED"],
+    ["bomb-rels", "xl/_rels/workbook.xml.rels", "DECOMPRESSED_BUDGET_EXCEEDED"],
+    ["bomb-workbook", "xl/workbook.xml", "DECOMPRESSED_BUDGET_EXCEEDED"],
+    ["bomb-inline", "xl/worksheets/sheet1.xml", "DECOMPRESSED_BUDGET_EXCEEDED"],
+    // Refused on the part whose output outgrows its declared size.
+    ["lying-sizes", "xl/sharedStrings.xml", "CORRUPT"],
   ];
 
-  for (const [name, part] of cases) {
+  for (const [name, part, code] of cases) {
     const error = await refusal(
       collect(
         xlsxRows(fixture(name), {
@@ -39,7 +44,7 @@ test("every hostile archive is refused at the part that blows up", async () => {
     );
 
     assert.ok(error instanceof XlsxError, name);
-    assert.equal(error.code, "DECOMPRESSED_BUDGET_EXCEEDED", name);
+    assert.equal(error.code, code, name);
     assert.match(error.message, new RegExp(part.replaceAll(".", "\\.")), name);
   }
 });

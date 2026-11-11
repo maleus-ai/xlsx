@@ -118,7 +118,7 @@ thing it was built to cause. On an 8 MiB memory budget, one process per figure:
 | `bomb-package-rels`   | 11.2 MB | `DECOMPRESSED_BUDGET_EXCEEDED` | 11.0 ms | 2.4 MB   |
 | `bomb-workbook`       | 10.0 MB | `DECOMPRESSED_BUDGET_EXCEEDED` | 5.7 ms  | 2.5 MB   |
 | `bomb-inline`         | 0.3 MB  | `DECOMPRESSED_BUDGET_EXCEEDED` | 1.2 ms  | 2.5 MB   |
-| `lying-sizes`         | 0.2 MB  | `DECOMPRESSED_BUDGET_EXCEEDED` | 11.4 ms | 2.4 MB   |
+| `lying-sizes`         | 0.2 MB  | `CORRUPT`                      | 0.5 ms  | 2.4 MB   |
 | `bomb-entries`        | 14.4 MB | `TOO_MANY_ENTRIES`             | 0.4 ms  | 2.1 MB   |
 | `bomb-wide-rows`      | 9.7 kB  | `DECOMPRESSED_BUDGET_EXCEEDED` | 13.9 ms | 10.5 MB  |
 | `bomb-column-ref`     | 1.9 kB  | `CORRUPT`                      | 0.7 ms  | 2.5 MB   |
@@ -234,23 +234,23 @@ files only — there is no open-change-save.
 Every refusal is an `XlsxError` with a stable `code`. Branch on the code, not on
 the message.
 
-| `code`                         | Raised by | Meaning                                                                                                          |
-| ------------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------- |
-| `NOT_AN_ARCHIVE`               | reading   | Not a ZIP, or its central directory is too damaged to read                                                       |
-| `SHEET_NOT_FOUND`              | reading   | No sheet by that name; the message lists the ones the workbook declares                                          |
-| `DECOMPRESSED_BUDGET_EXCEEDED` | reading   | The archive expands past `maxDecompressedBytes`                                                                  |
-| `TOO_MANY_ENTRIES`             | reading   | Indexing the archive's entries alone would cost more than the budget allows                                      |
-| `ROW_BUDGET_EXCEEDED`          | reading   | The sheet holds more rows than `maxRows`                                                                         |
-| `CORRUPT`                      | reading   | A ZIP but not a readable workbook: a missing part, XML that does not parse, a cell reference that makes no sense |
-| `INVALID_DATETIME`             | writing   | A timestamp that cannot be placed: not ISO 8601, a UTC offset, or before 1900                                    |
-| `INVALID_VALUE`                | writing   | A cell that cannot be written: a `Date` in an undeclared column, a non-finite number, a type with no cell for it |
-| `SHEET_LIMIT_EXCEEDED`         | writing   | Past Excel's grid of 1 048 576 rows by 16 384 columns                                                            |
-| `INVALID_SHEET_NAME`           | writing   | A sheet name Excel refuses                                                                                       |
-| `WRITE_FAILED`                 | writing   | The workbook could not be assembled                                                                              |
-| `IO`                           | both      | The file could not be read or written, or a temporary file could not be made                                     |
-| `INVALID_OPTION`               | both      | An option is missing or malformed                                                                                |
-| `CLOSED`                       | both      | The stream was closed, or rows were added after the file started streaming                                       |
-| `UNSUPPORTED_PLATFORM`         | both      | No native binary was built for this platform; raised when the module loads                                       |
+| `code`                         | Raised by | Meaning                                                                                                                                                       |
+| ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NOT_AN_ARCHIVE`               | reading   | Not a ZIP, or its central directory is too damaged to read                                                                                                    |
+| `SHEET_NOT_FOUND`              | reading   | No sheet by that name; the message lists the ones the workbook declares                                                                                       |
+| `DECOMPRESSED_BUDGET_EXCEEDED` | reading   | The archive expands past `maxDecompressedBytes`                                                                                                               |
+| `TOO_MANY_ENTRIES`             | reading   | Indexing the archive's entries alone would cost more than the budget allows                                                                                   |
+| `ROW_BUDGET_EXCEEDED`          | reading   | The sheet holds more rows than `maxRows`                                                                                                                      |
+| `CORRUPT`                      | reading   | A ZIP but not a readable workbook: a missing part, a part that inflates past its declared size, XML that does not parse, a cell reference that makes no sense |
+| `INVALID_DATETIME`             | writing   | A timestamp that cannot be placed: not ISO 8601, a UTC offset, or before 1900                                                                                 |
+| `INVALID_VALUE`                | writing   | A cell that cannot be written: a `Date` in an undeclared column, a non-finite number, a type with no cell for it                                              |
+| `SHEET_LIMIT_EXCEEDED`         | writing   | Past Excel's grid of 1 048 576 rows by 16 384 columns                                                                                                         |
+| `INVALID_SHEET_NAME`           | writing   | A sheet name Excel refuses                                                                                                                                    |
+| `WRITE_FAILED`                 | writing   | The workbook could not be assembled                                                                                                                           |
+| `IO`                           | both      | The file could not be read or written, or a temporary file could not be made                                                                                  |
+| `INVALID_OPTION`               | both      | An option is missing or malformed                                                                                                                             |
+| `CLOSED`                       | both      | The stream was closed, or rows were added after the file started streaming                                                                                    |
+| `UNSUPPORTED_PLATFORM`         | both      | No native binary was built for this platform; raised when the module loads                                                                                    |
 
 ## Measurements
 

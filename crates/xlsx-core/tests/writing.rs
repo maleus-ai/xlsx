@@ -598,10 +598,10 @@ fn a_control_character_in_a_sheet_name_is_refused() {
 
 #[test]
 fn a_workbook_stops_at_its_sheet_ceiling() {
-    // Each sheet holds a temporary file open until the workbook is finished,
-    // and the underlying writer panics rather than errors when it cannot open
-    // one. A caller whose sheet names come from its data would otherwise hand
-    // that panic to whoever supplies the data.
+    // Each sheet holds a temporary file open until the workbook is finished. A
+    // caller whose sheet names come from its data would otherwise let whoever
+    // supplies the data spend the process's descriptors, until a sheet fails
+    // with `IO` for want of one.
     let mut writer = XlsxWriter::new(WriterOptions {
         sheet_name: "S0".to_owned(),
         max_sheets: Some(4),

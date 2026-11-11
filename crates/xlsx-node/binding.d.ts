@@ -122,9 +122,9 @@ export interface JsWriterOptions {
    * Sheets the workbook may hold. Defaults to 256.
    *
    * Each sheet keeps a temporary file open until the workbook is finished,
-   * and the underlying writer panics rather than errors when it runs out of
-   * descriptors — so this is a ceiling on a real resource, not on the
-   * format, which has none.
+   * so this is a ceiling on a real resource, not on the format, which has
+   * none: without it, running out of descriptors fails the sheet that
+   * cannot open one with `IO`.
    */
   maxSheets?: number
   /**
