@@ -44,7 +44,19 @@ impl Budget {
         Self { limit, used: 0 }
     }
 
-    fn charge(&mut self, bytes: u64, entry: &str) -> Result<(), ReadError> {
+    /// The ceiling.
+    pub(crate) fn limit(&self) -> u64 {
+        self.limit
+    }
+
+    /// Bytes charged so far.
+    pub(crate) fn used(&self) -> u64 {
+        self.used
+    }
+
+    /// Charge bytes counted elsewhere — by a stream that inflated a part
+    /// without going through [`inflate_entry_within`].
+    pub(crate) fn charge(&mut self, bytes: u64, entry: &str) -> Result<(), ReadError> {
         self.used = self.used.saturating_add(bytes);
         if self.used > self.limit {
             return Err(ReadError::DecompressedBudgetExceeded {

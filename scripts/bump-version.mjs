@@ -3,7 +3,12 @@
 // Set the release version everywhere it is written.
 //
 //   node scripts/bump-version.mjs 0.2.0
+//   node scripts/bump-version.mjs 1.0.0-rc.1
 //   node scripts/bump-version.mjs minor
+//
+// The changelog section for the target version is written first: the script
+// refuses a version `crates/xlsx-node/CHANGELOG.md` does not describe, and the
+// first version of a new major without its `migrations/<major>.0.0.md`.
 //
 // The version lives in four files and nothing keeps them in step: the Cargo
 // workspace, the npm manifest, and the two lockfiles that record what those two
@@ -18,12 +23,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { checkRelease, nextVersion } from "./lib/release-guard.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const CARGO_TOML = path.join(ROOT, "Cargo.toml");
 const PACKAGE_JSON = path.join(ROOT, "crates/xlsx-node/package.json");
 
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+const CHANGELOG = path.join(ROOT, "crates/xlsx-node/CHANGELOG.md");
+const MIGRATIONS = path.join(ROOT, "crates/xlsx-node/migrations");
 
 function fail(message) {
   console.error(message);
@@ -41,35 +49,28 @@ function currentVersion() {
   return match[1];
 }
 
-function nextVersion(current, requested) {
-  if (SEMVER.test(requested)) {
-    return requested;
-  }
-
-  const [major, minor, patch] = current.split(".").map(Number);
-  switch (requested) {
-    case "major":
-      return `${major + 1}.0.0`;
-    case "minor":
-      return `${major}.${minor + 1}.0`;
-    case "patch":
-      return `${major}.${minor}.${patch + 1}`;
-    default:
-      return fail(
-        `expected a version like 1.2.3, or major|minor|patch — got ${requested}`,
-      );
+function resolveNext(current, requested) {
+  try {
+    return nextVersion(current, requested);
+  } catch (error) {
+    return fail(error.message);
   }
 }
 
-/** Refuse to go backwards: a published version cannot be republished. */
-function assertForward(current, next) {
-  const [a, b, c] = current.split(".").map(Number);
-  const [x, y, z] = next.split(".").map(Number);
-  const ordered = x > a || (x === a && (y > b || (y === b && z > c)));
-  if (!ordered) {
-    fail(
-      `${next} is not ahead of ${current}; npm does not take a version back`,
-    );
+/**
+ * Refuse a version that cannot ship: one that does not move forward, one the
+ * changelog does not describe, a breaking one without its migration recipe.
+ */
+function assertReleasable(current, next) {
+  const recipes = fs.existsSync(MIGRATIONS) ? fs.readdirSync(MIGRATIONS) : [];
+  const problems = checkRelease({
+    current,
+    next,
+    changelog: fs.readFileSync(CHANGELOG, "utf8"),
+    recipes,
+  });
+  if (problems.length > 0) {
+    fail(problems.map((problem) => `  - ${problem}`).join("\n"));
   }
 }
 
@@ -84,8 +85,8 @@ if (!requested) {
 }
 
 const current = currentVersion();
-const next = nextVersion(current, requested);
-assertForward(current, next);
+const next = resolveNext(current, requested);
+assertReleasable(current, next);
 
 console.log(`${current} → ${next}\n`);
 

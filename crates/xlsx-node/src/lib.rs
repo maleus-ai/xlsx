@@ -19,17 +19,20 @@
 
 #![deny(clippy::all)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 
-use napi::bindgen_prelude::{AsyncTask, Buffer, Either4, Env, Null, Result, Task};
+use napi::bindgen_prelude::{
+    AsyncTask, Buffer, Either4, Env, Null, Result, Task, Uint32Array, Uint8Array,
+};
 use napi::Error;
 use napi_derive::napi;
 
 use xlsx_core::{
-    validate_sheet_name, CellValue, ReadError, ReaderOptions, WriteError, WriterOptions,
-    XlsxReader, XlsxWriter,
+    inspect_sheet, inspect_workbook, validate_sheet_name, CellReaderOptions, CellStyle, CellType,
+    CellValue, Color, Fill, Font, NumFmt, ReadError, ReaderOptions, SheetInfo, SheetInspection,
+    WorkbookInspection, WriteError, WriterOptions, XlsxCells, XlsxReader, XlsxWriter,
 };
 
 /// One sheet, as the workbook declares it.
@@ -37,8 +40,21 @@ use xlsx_core::{
 pub struct JsSheetInfo {
     /// Sheet name, as it appears on the tab.
     pub name: String,
-    /// `false` for both `hidden` and `veryHidden` sheets.
-    pub visible: bool,
+    /// The identifier the workbook gives the sheet, unrelated to its position.
+    pub sheet_id: u32,
+    /// Whether the sheet shows on the tab bar.
+    #[napi(ts_type = "'visible' | 'hidden' | 'veryHidden'")]
+    pub state: String,
+}
+
+impl From<&SheetInfo> for JsSheetInfo {
+    fn from(sheet: &SheetInfo) -> Self {
+        Self {
+            name: sheet.name.clone(),
+            sheet_id: sheet.sheet_id,
+            state: sheet.state.as_str().to_owned(),
+        }
+    }
 }
 
 /// Reader options. Both budgets are required — see the crate's decision on why
@@ -53,9 +69,9 @@ pub struct JsReaderOptions {
     pub max_rows: f64,
 }
 
-/// Options for a listing, which reads no row and so needs no row budget.
+/// Options for a peek, which reads no row and so needs no row budget.
 #[napi(object)]
-pub struct JsListOptions {
+pub struct JsPeekOptions {
     /// Bytes the archive may expand to.
     pub max_decompressed_bytes: f64,
 }
@@ -68,25 +84,73 @@ pub struct JsListOptions {
 /// what the column already says.
 type JsCell = Either4<String, f64, bool, Null>;
 
-/// A batch of rows, or `null` once the sheet is finished.
-type JsBatch = Option<Vec<Vec<JsCell>>>;
-
-struct State {
-    path: PathBuf,
-    options: ReaderOptions,
-    sheet: Option<String>,
-    reader: Option<XlsxReader>,
+/// A batch of rows: their values, and beside them their positions in the sheet.
+///
+/// Two parallel arrays rather than one object per row: the facade assembles the
+/// `{ row, values }` objects on its side, and the crossing carries one integer
+/// per row on top of the values it already carried.
+#[napi(object)]
+pub struct JsRowBatch {
+    /// 0-based position in the sheet of each row, in order.
+    pub positions: Vec<u32>,
+    /// Values of each row, at their column index.
+    #[napi(ts_type = "Array<Array<string | number | boolean | null>>")]
+    pub rows: Vec<Vec<JsCell>>,
 }
 
-impl State {
+/// A batch of rows, or `null` once the sheet is finished.
+type JsBatch = Option<JsRowBatch>;
+
+/// What a cursor reads through: rows, or cells.
+pub trait Source: Sized + Send {
+    type Options: Copy + Send;
+    fn open(path: &Path, options: Self::Options) -> std::result::Result<Self, ReadError>;
+    fn select(&mut self, name: &str) -> std::result::Result<(), ReadError>;
+    fn sheets(&self) -> &[SheetInfo];
+}
+
+impl Source for XlsxReader {
+    type Options = ReaderOptions;
+    fn open(path: &Path, options: ReaderOptions) -> std::result::Result<Self, ReadError> {
+        XlsxReader::open(path, options)
+    }
+    fn select(&mut self, name: &str) -> std::result::Result<(), ReadError> {
+        XlsxReader::select(self, name)
+    }
+    fn sheets(&self) -> &[SheetInfo] {
+        XlsxReader::sheets(self)
+    }
+}
+
+impl Source for XlsxCells {
+    type Options = CellReaderOptions;
+    fn open(path: &Path, options: CellReaderOptions) -> std::result::Result<Self, ReadError> {
+        XlsxCells::open(path, options)
+    }
+    fn select(&mut self, name: &str) -> std::result::Result<(), ReadError> {
+        XlsxCells::select(self, name)
+    }
+    fn sheets(&self) -> &[SheetInfo] {
+        XlsxCells::sheets(self)
+    }
+}
+
+struct State<R: Source> {
+    path: PathBuf,
+    options: R::Options,
+    sheet: Option<String>,
+    reader: Option<R>,
+}
+
+impl<R: Source> State<R> {
     /// The reader, opened on first use.
     ///
     /// Opening is deferred so that the constructor — which JavaScript calls on
     /// the main thread — does no I/O at all. The first pull pays for the open,
     /// on the threadpool, where it belongs.
-    fn reader(&mut self) -> Result<&mut XlsxReader> {
+    fn reader(&mut self) -> Result<&mut R> {
         if self.reader.is_none() {
-            let mut reader = XlsxReader::open(&self.path, self.options).map_err(to_js_error)?;
+            let mut reader = R::open(&self.path, self.options).map_err(to_js_error)?;
             if let Some(name) = &self.sheet {
                 reader.select(name).map_err(to_js_error)?;
             }
@@ -106,14 +170,37 @@ impl State {
 /// abandons a stream. Taking the lock there would hand any client the ability to
 /// stall the event loop by starting an upload and cutting it: exactly the
 /// invariant this binding exists to hold.
-struct Shared {
-    state: Mutex<State>,
+struct Shared<R: Source> {
+    state: Mutex<State<R>>,
     closed: AtomicBool,
 }
 
-impl Shared {
+impl<R: Source> Shared<R> {
+    fn new(path: String, options: R::Options, sheet: Option<String>) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(State {
+                path: PathBuf::from(path),
+                options,
+                sheet,
+                reader: None,
+            }),
+            closed: AtomicBool::new(false),
+        })
+    }
+
+    /// Mark the cursor closed and release the archive if no read holds it.
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+
+        // Never blocks. If a read is in flight it holds the lock, sees the flag
+        // on its way out, and releases the archive itself.
+        if let Ok(mut state) = self.state.try_lock() {
+            state.reader = None;
+        }
+    }
+
     /// Run `work` against the reader, opening it if this is the first pull.
-    fn with_reader<T>(&self, work: impl FnOnce(&mut XlsxReader) -> Result<T>) -> Result<T> {
+    fn with_reader<T>(&self, work: impl FnOnce(&mut R) -> Result<T>) -> Result<T> {
         if self.closed.load(Ordering::Acquire) {
             return Err(closed_error());
         }
@@ -148,7 +235,7 @@ fn to_js_error(error: ReadError) -> Error {
 /// position in a file, not an invariant that a panic can leave half-written, so
 /// the guard is taken anyway rather than turning one failure into every
 /// subsequent call failing.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+fn lock<R: Source>(state: &Mutex<State<R>>) -> MutexGuard<'_, State<R>> {
     state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -161,7 +248,7 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 /// which of the two gets which batch is not defined.
 #[napi]
 pub struct XlsxCursor {
-    shared: Arc<Shared>,
+    shared: Arc<Shared<XlsxReader>>,
 }
 
 #[napi]
@@ -174,31 +261,27 @@ impl XlsxCursor {
         let max_rows = budget(options.max_rows, "maxRows")?;
 
         Ok(Self {
-            shared: Arc::new(Shared {
-                state: Mutex::new(State {
-                    path: PathBuf::from(path),
-                    options: ReaderOptions {
-                        max_decompressed_bytes,
-                        max_rows,
-                    },
-                    sheet: options.sheet,
-                    reader: None,
-                }),
-                closed: AtomicBool::new(false),
-            }),
+            shared: Shared::new(
+                path,
+                ReaderOptions {
+                    max_decompressed_bytes,
+                    max_rows,
+                },
+                options.sheet,
+            ),
         })
     }
 
     /// The sheets the workbook declares.
     #[napi(ts_return_type = "Promise<Array<JsSheetInfo>>")]
-    pub fn sheets(&self) -> AsyncTask<SheetsTask> {
+    pub fn sheets(&self) -> AsyncTask<SheetsTask<XlsxReader>> {
         AsyncTask::new(SheetsTask {
             shared: Arc::clone(&self.shared),
         })
     }
 
     /// Pull at most `size` rows. Resolves to `null` once the sheet is finished.
-    #[napi(ts_return_type = "Promise<Array<Array<string | number | boolean | null>> | null>")]
+    #[napi(ts_return_type = "Promise<JsRowBatch | null>")]
     pub fn next_batch(&self, size: u32) -> AsyncTask<NextBatchTask> {
         AsyncTask::new(NextBatchTask {
             shared: Arc::clone(&self.shared),
@@ -213,13 +296,184 @@ impl XlsxCursor {
     /// the object lives.
     #[napi]
     pub fn close(&self) {
-        self.shared.closed.store(true, Ordering::Release);
+        self.shared.close();
+    }
+}
 
-        // Never blocks. If a read is in flight it holds the lock, sees the flag
-        // on its way out, and releases the archive itself.
-        if let Ok(mut state) = self.shared.state.try_lock() {
-            state.reader = None;
-        }
+/// Cell reader options. Both budgets are required.
+#[napi(object)]
+pub struct JsCellReaderOptions {
+    /// Sheet to read. Defaults to the first one in the workbook.
+    pub sheet: Option<String>,
+    /// Bytes the archive may expand to, the sheet's second reading included.
+    pub max_decompressed_bytes: f64,
+    /// Cells the sheet may yield.
+    pub max_cells: f64,
+}
+
+/// A cell's formula — `CT_CellFormula`.
+#[napi(object)]
+pub struct JsFormula {
+    /// The formula as written, without the leading `=`.
+    pub text: String,
+    /// How the formula is shared — `ST_CellFormulaType`.
+    #[napi(
+        js_name = "type",
+        ts_type = "'normal' | 'shared' | 'array' | 'dataTable'"
+    )]
+    pub formula_type: String,
+    /// The range a shared or array formula covers, on the cell declaring it.
+    #[napi(js_name = "ref")]
+    pub reference: Option<String>,
+}
+
+/// A batch of cells, as parallel arrays the facade assembles into objects.
+///
+/// Numbers travel in typed arrays and the cell type as a one-byte code, and
+/// formulas only for the cells that have one: a batch of a thousand cells is a
+/// handful of allocations on the JavaScript side rather than several thousand.
+#[napi(object)]
+pub struct JsCellBatch {
+    /// 0-based row of each cell.
+    pub rows: Uint32Array,
+    /// 0-based column of each cell.
+    pub cols: Uint32Array,
+    /// What each value is, as an index into [`CELL_TYPES`].
+    pub types: Uint8Array,
+    /// Each cell's value.
+    #[napi(ts_type = "Array<string | number | boolean | null>")]
+    pub values: Vec<JsCell>,
+    /// Each cell's index in the workbook's cell formats.
+    pub style_ids: Uint32Array,
+    /// Position in the batch of each cell that has a formula, in order.
+    pub formula_cells: Uint32Array,
+    /// The formulas of those cells, in the same order.
+    pub formulas: Vec<JsFormula>,
+}
+
+/// The cell types, in the order of their codes in [`JsCellBatch::types`]. The
+/// facade holds the same list.
+const CELL_TYPES: [CellType; 7] = [
+    CellType::String,
+    CellType::Number,
+    CellType::Boolean,
+    CellType::Date,
+    CellType::Duration,
+    CellType::Error,
+    CellType::Empty,
+];
+
+fn cell_type_code(cell_type: CellType) -> u8 {
+    CELL_TYPES
+        .iter()
+        .position(|candidate| *candidate == cell_type)
+        .map_or(u8::MAX, |code| code as u8)
+}
+
+/// A cursor over the cells of one worksheet. Same protocol as [`XlsxCursor`].
+#[napi]
+pub struct XlsxCellCursor {
+    shared: Arc<Shared<XlsxCells>>,
+}
+
+#[napi]
+impl XlsxCellCursor {
+    /// Build a cursor. Does no I/O: the file is opened on the first pull.
+    #[napi(constructor)]
+    pub fn new(path: String, options: JsCellReaderOptions) -> Result<Self> {
+        let max_decompressed_bytes =
+            budget(options.max_decompressed_bytes, "maxDecompressedBytes")?;
+        let max_cells = budget(options.max_cells, "maxCells")?;
+
+        Ok(Self {
+            shared: Shared::new(
+                path,
+                CellReaderOptions {
+                    max_decompressed_bytes,
+                    max_cells,
+                },
+                options.sheet,
+            ),
+        })
+    }
+
+    /// The sheets the workbook declares.
+    #[napi(ts_return_type = "Promise<Array<JsSheetInfo>>")]
+    pub fn sheets(&self) -> AsyncTask<SheetsTask<XlsxCells>> {
+        AsyncTask::new(SheetsTask {
+            shared: Arc::clone(&self.shared),
+        })
+    }
+
+    /// Pull at most `size` cells. Resolves to `null` once the sheet is finished.
+    #[napi(ts_return_type = "Promise<JsCellBatch | null>")]
+    pub fn next_batch(&self, size: u32) -> AsyncTask<NextCellBatchTask> {
+        AsyncTask::new(NextCellBatchTask {
+            shared: Arc::clone(&self.shared),
+            size: size as usize,
+        })
+    }
+
+    /// Release the archive now rather than at the next garbage collection.
+    #[napi]
+    pub fn close(&self) {
+        self.shared.close();
+    }
+}
+
+pub struct NextCellBatchTask {
+    shared: Arc<Shared<XlsxCells>>,
+    size: usize,
+}
+
+impl Task for NextCellBatchTask {
+    type Output = Option<JsCellBatch>;
+    type JsValue = Option<JsCellBatch>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let size = self.size;
+
+        self.shared.with_reader(|reader| {
+            let Some(cells) = reader.next_batch(size).map_err(to_js_error)? else {
+                return Ok(None);
+            };
+
+            let mut rows = Vec::with_capacity(cells.len());
+            let mut cols = Vec::with_capacity(cells.len());
+            let mut types = Vec::with_capacity(cells.len());
+            let mut values = Vec::with_capacity(cells.len());
+            let mut style_ids = Vec::with_capacity(cells.len());
+            let mut formula_cells = Vec::new();
+            let mut formulas = Vec::new();
+            for (index, cell) in cells.into_iter().enumerate() {
+                rows.push(cell.row);
+                cols.push(cell.col);
+                types.push(cell_type_code(cell.cell_type));
+                values.push(to_js_cell(cell.value));
+                style_ids.push(cell.style_id);
+                if let Some(formula) = cell.formula {
+                    formula_cells.push(index as u32);
+                    formulas.push(JsFormula {
+                        text: formula.text,
+                        formula_type: formula.formula_type.as_str().to_owned(),
+                        reference: formula.reference,
+                    });
+                }
+            }
+            Ok(Some(JsCellBatch {
+                rows: Uint32Array::new(rows),
+                cols: Uint32Array::new(cols),
+                types: Uint8Array::new(types),
+                values,
+                style_ids: Uint32Array::new(style_ids),
+                formula_cells: Uint32Array::new(formula_cells),
+                formulas,
+            }))
+        })
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
     }
 }
 
@@ -232,41 +486,35 @@ fn budget(value: f64, name: &str) -> Result<u64> {
     Ok(value as u64)
 }
 
-/// List the sheets a workbook declares, without opening it to read rows.
+/// Peek at the sheets a workbook declares, without opening it to read rows.
 ///
 /// Separate from [`XlsxCursor::sheets`] because it takes a different path
 /// through the file: two small parts inflated and counted, rather than a walk of
 /// the whole archive. The bound still applies — it is applied to what gets read.
-#[napi(js_name = "listSheets", ts_return_type = "Promise<Array<JsSheetInfo>>")]
-pub fn list_sheets(path: String, options: JsListOptions) -> Result<AsyncTask<ListSheetsTask>> {
+#[napi(js_name = "peekSheets", ts_return_type = "Promise<Array<JsSheetInfo>>")]
+pub fn peek_sheets(path: String, options: JsPeekOptions) -> Result<AsyncTask<PeekSheetsTask>> {
     let max_decompressed_bytes = budget(options.max_decompressed_bytes, "maxDecompressedBytes")?;
 
-    Ok(AsyncTask::new(ListSheetsTask {
+    Ok(AsyncTask::new(PeekSheetsTask {
         path: PathBuf::from(path),
         max_decompressed_bytes,
     }))
 }
 
-pub struct ListSheetsTask {
+pub struct PeekSheetsTask {
     path: PathBuf,
     max_decompressed_bytes: u64,
 }
 
-impl Task for ListSheetsTask {
+impl Task for PeekSheetsTask {
     type Output = Vec<JsSheetInfo>;
     type JsValue = Vec<JsSheetInfo>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let sheets = XlsxReader::list_sheets(&self.path, self.max_decompressed_bytes)
+        let sheets = XlsxReader::peek_sheets(&self.path, self.max_decompressed_bytes)
             .map_err(to_js_error)?;
 
-        Ok(sheets
-            .into_iter()
-            .map(|sheet| JsSheetInfo {
-                name: sheet.name,
-                visible: sheet.visible,
-            })
-            .collect())
+        Ok(sheets.iter().map(JsSheetInfo::from).collect())
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -274,25 +522,631 @@ impl Task for ListSheetsTask {
     }
 }
 
-pub struct SheetsTask {
-    shared: Arc<Shared>,
+// ------------------------------------------------------------- inspection --
+
+/// `CT_Color`, as declared.
+#[napi(object)]
+pub struct JsColor {
+    pub rgb: Option<String>,
+    pub theme: Option<u32>,
+    pub indexed: Option<u32>,
+    pub auto: bool,
+    pub tint: Option<f64>,
 }
 
-impl Task for SheetsTask {
+impl From<Color> for JsColor {
+    fn from(color: Color) -> Self {
+        Self {
+            rgb: color.rgb,
+            theme: color.theme,
+            indexed: color.indexed,
+            auto: color.auto,
+            tint: color.tint,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsNumFmt {
+    pub num_fmt_id: u32,
+    pub format_code: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsFont {
+    pub name: Option<String>,
+    pub size: Option<f64>,
+    pub bold: bool,
+    pub italic: bool,
+    pub strike: bool,
+    #[napi(ts_type = "'single' | 'double' | 'singleAccounting' | 'doubleAccounting' | 'none'")]
+    pub underline: Option<String>,
+    #[napi(ts_type = "'baseline' | 'superscript' | 'subscript'")]
+    pub vert_align: Option<String>,
+    pub color: Option<JsColor>,
+}
+
+#[napi(object)]
+pub struct JsPatternFill {
+    pub pattern_type: Option<String>,
+    pub fg_color: Option<JsColor>,
+    pub bg_color: Option<JsColor>,
+}
+
+#[napi(object)]
+pub struct JsGradientStop {
+    pub position: f64,
+    pub color: JsColor,
+}
+
+#[napi(object)]
+pub struct JsGradientFill {
+    #[napi(js_name = "type", ts_type = "'linear' | 'path'")]
+    pub gradient_type: String,
+    pub degree: Option<f64>,
+    pub stops: Vec<JsGradientStop>,
+}
+
+#[napi(object)]
+pub struct JsFill {
+    pub pattern_fill: Option<JsPatternFill>,
+    pub gradient_fill: Option<JsGradientFill>,
+}
+
+#[napi(object)]
+pub struct JsAlignment {
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: bool,
+    pub shrink_to_fit: bool,
+    pub indent: Option<u32>,
+    pub text_rotation: Option<u32>,
+}
+
+#[napi(object)]
+pub struct JsCellStyle {
+    pub num_fmt_ref: u32,
+    pub font_ref: Option<u32>,
+    pub fill_ref: Option<u32>,
+    pub alignment: JsAlignment,
+}
+
+impl From<NumFmt> for JsNumFmt {
+    fn from(num_fmt: NumFmt) -> Self {
+        Self {
+            num_fmt_id: num_fmt.num_fmt_id,
+            format_code: num_fmt.format_code,
+        }
+    }
+}
+
+impl From<Font> for JsFont {
+    fn from(font: Font) -> Self {
+        Self {
+            name: font.name,
+            size: font.size,
+            bold: font.bold,
+            italic: font.italic,
+            strike: font.strike,
+            underline: font.underline,
+            vert_align: font.vert_align,
+            color: font.color.map(JsColor::from),
+        }
+    }
+}
+
+impl From<Fill> for JsFill {
+    fn from(fill: Fill) -> Self {
+        Self {
+            pattern_fill: fill.pattern_fill.map(|pattern| JsPatternFill {
+                pattern_type: pattern.pattern_type,
+                fg_color: pattern.fg_color.map(JsColor::from),
+                bg_color: pattern.bg_color.map(JsColor::from),
+            }),
+            gradient_fill: fill.gradient_fill.map(|gradient| JsGradientFill {
+                gradient_type: gradient.gradient_type,
+                degree: gradient.degree,
+                stops: gradient
+                    .stops
+                    .into_iter()
+                    .map(|stop| JsGradientStop {
+                        position: stop.position,
+                        color: stop.color.into(),
+                    })
+                    .collect(),
+            }),
+        }
+    }
+}
+
+impl From<CellStyle> for JsCellStyle {
+    fn from(style: CellStyle) -> Self {
+        Self {
+            num_fmt_ref: style.num_fmt_ref,
+            font_ref: style.font_ref,
+            fill_ref: style.fill_ref,
+            alignment: JsAlignment {
+                horizontal: style.alignment.horizontal,
+                vertical: style.alignment.vertical,
+                wrap_text: style.alignment.wrap_text,
+                shrink_to_fit: style.alignment.shrink_to_fit,
+                indent: style.alignment.indent,
+                text_rotation: style.alignment.text_rotation,
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsDefinedName {
+    pub name: String,
+    pub formula: String,
+    pub local_sheet_id: Option<u32>,
+    pub hidden: bool,
+    pub comment: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsDocumentProperties {
+    pub creator: Option<String>,
+    pub last_modified_by: Option<String>,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+    pub title: Option<String>,
+    pub subject: Option<String>,
+    pub description: Option<String>,
+    pub keywords: Option<String>,
+    pub category: Option<String>,
+    pub application: Option<String>,
+    pub app_version: Option<String>,
+    pub company: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsWorkbookParts {
+    pub vba_project: bool,
+    pub pivot_tables: bool,
+    pub external_links: bool,
+    pub drawings: bool,
+}
+
+#[napi(object)]
+pub struct JsWorkbookInspection {
+    pub sheets: Vec<JsSheetInfo>,
+    pub defined_names: Vec<JsDefinedName>,
+    pub properties: JsDocumentProperties,
+    pub date1904: bool,
+    pub parts: JsWorkbookParts,
+    pub num_fmts: Vec<JsNumFmt>,
+    pub fonts: Vec<JsFont>,
+    pub fills: Vec<JsFill>,
+    pub styles: Vec<JsCellStyle>,
+}
+
+impl From<WorkbookInspection> for JsWorkbookInspection {
+    fn from(inspection: WorkbookInspection) -> Self {
+        let p = inspection.properties;
+        Self {
+            sheets: inspection.sheets.iter().map(JsSheetInfo::from).collect(),
+            defined_names: inspection
+                .defined_names
+                .into_iter()
+                .map(|name| JsDefinedName {
+                    name: name.name,
+                    formula: name.formula,
+                    local_sheet_id: name.local_sheet_id,
+                    hidden: name.hidden,
+                    comment: name.comment,
+                })
+                .collect(),
+            properties: JsDocumentProperties {
+                creator: p.creator,
+                last_modified_by: p.last_modified_by,
+                created: p.created,
+                modified: p.modified,
+                title: p.title,
+                subject: p.subject,
+                description: p.description,
+                keywords: p.keywords,
+                category: p.category,
+                application: p.application,
+                app_version: p.app_version,
+                company: p.company,
+            },
+            date1904: inspection.date1904,
+            parts: JsWorkbookParts {
+                vba_project: inspection.parts.vba_project,
+                pivot_tables: inspection.parts.pivot_tables,
+                external_links: inspection.parts.external_links,
+                drawings: inspection.parts.drawings,
+            },
+            num_fmts: inspection
+                .num_fmts
+                .into_iter()
+                .map(JsNumFmt::from)
+                .collect(),
+            fonts: inspection.fonts.into_iter().map(JsFont::from).collect(),
+            fills: inspection.fills.into_iter().map(JsFill::from).collect(),
+            styles: inspection
+                .styles
+                .into_iter()
+                .map(JsCellStyle::from)
+                .collect(),
+        }
+    }
+}
+
+/// Inspect a workbook: properties, defined names, parts, styles. Reads no sheet.
+#[napi(
+    js_name = "inspectWorkbook",
+    ts_return_type = "Promise<JsWorkbookInspection>"
+)]
+pub fn js_inspect_workbook(
+    path: String,
+    options: JsPeekOptions,
+) -> Result<AsyncTask<InspectWorkbookTask>> {
+    let max_decompressed_bytes = budget(options.max_decompressed_bytes, "maxDecompressedBytes")?;
+    Ok(AsyncTask::new(InspectWorkbookTask {
+        path: PathBuf::from(path),
+        max_decompressed_bytes,
+    }))
+}
+
+pub struct InspectWorkbookTask {
+    path: PathBuf,
+    max_decompressed_bytes: u64,
+}
+
+impl Task for InspectWorkbookTask {
+    type Output = JsWorkbookInspection;
+    type JsValue = JsWorkbookInspection;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        inspect_workbook(&self.path, self.max_decompressed_bytes)
+            .map(JsWorkbookInspection::from)
+            .map_err(to_js_error)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi(object)]
+pub struct JsPane {
+    pub x_split: Option<f64>,
+    pub y_split: Option<f64>,
+    pub top_left_cell: Option<String>,
+    #[napi(ts_type = "'split' | 'frozen' | 'frozenSplit'")]
+    pub state: String,
+}
+
+#[napi(object)]
+pub struct JsColumnRange {
+    pub first_col: u32,
+    pub last_col: u32,
+    pub width: Option<f64>,
+    pub hidden: bool,
+    pub outline_level: Option<u32>,
+}
+
+#[napi(object)]
+pub struct JsHyperlink {
+    #[napi(js_name = "ref")]
+    pub reference: String,
+    pub target: Option<String>,
+    pub location: Option<String>,
+    pub tooltip: Option<String>,
+    pub display: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsTableColumn {
+    pub name: String,
+    pub totals_row_function: Option<String>,
+    pub totals_row_label: Option<String>,
+    pub totals_row_formula: Option<String>,
+    pub calculated_column_formula: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsTable {
+    pub name: String,
+    pub display_name: String,
+    #[napi(js_name = "ref")]
+    pub reference: String,
+    pub header_row_count: u32,
+    pub totals_row_count: u32,
+    pub table_columns: Vec<JsTableColumn>,
+}
+
+#[napi(object)]
+pub struct JsDataValidation {
+    pub sqref: Vec<String>,
+    pub extension: bool,
+    #[napi(js_name = "type")]
+    pub validation_type: Option<String>,
+    pub operator: Option<String>,
+    pub allow_blank: bool,
+    pub show_drop_down: bool,
+    pub show_input_message: bool,
+    pub show_error_message: bool,
+    pub error_style: Option<String>,
+    pub error_title: Option<String>,
+    pub error: Option<String>,
+    pub prompt_title: Option<String>,
+    pub prompt: Option<String>,
+    pub formula1: Option<String>,
+    pub formula2: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsCfRule {
+    #[napi(js_name = "type")]
+    pub rule_type: String,
+    pub priority: u32,
+    pub operator: Option<String>,
+    pub stop_if_true: bool,
+    pub text: Option<String>,
+    pub time_period: Option<String>,
+    pub formulas: Vec<String>,
+    pub dxf_id: Option<u32>,
+}
+
+#[napi(object)]
+pub struct JsConditionalFormatting {
+    pub sqref: Vec<String>,
+    pub extension: bool,
+    pub rules: Vec<JsCfRule>,
+}
+
+#[napi(object)]
+pub struct JsSheetProtection {
+    pub password_protected: bool,
+    pub sheet: bool,
+    pub objects: bool,
+    pub scenarios: bool,
+    pub format_cells: bool,
+    pub format_columns: bool,
+    pub format_rows: bool,
+    pub insert_columns: bool,
+    pub insert_rows: bool,
+    pub insert_hyperlinks: bool,
+    pub delete_columns: bool,
+    pub delete_rows: bool,
+    pub select_locked_cells: bool,
+    pub sort: bool,
+    pub auto_filter: bool,
+    pub pivot_tables: bool,
+    pub select_unlocked_cells: bool,
+}
+
+#[napi(object)]
+pub struct JsAutoFilter {
+    #[napi(js_name = "ref")]
+    pub reference: String,
+}
+
+#[napi(object)]
+pub struct JsComment {
+    #[napi(js_name = "ref")]
+    pub reference: String,
+    pub author_ref: Option<u32>,
+    pub text: String,
+}
+
+#[napi(object)]
+pub struct JsSheetInspection {
+    pub dimension: Option<String>,
+    pub tab_color: Option<JsColor>,
+    pub pane: Option<JsPane>,
+    pub cols: Vec<JsColumnRange>,
+    pub hidden_rows: Vec<u32>,
+    pub merge_cells: Vec<String>,
+    pub hyperlinks: Vec<JsHyperlink>,
+    pub tables: Vec<JsTable>,
+    pub data_validations: Vec<JsDataValidation>,
+    pub conditional_formatting: Vec<JsConditionalFormatting>,
+    pub sheet_protection: Option<JsSheetProtection>,
+    pub auto_filter: Option<JsAutoFilter>,
+    pub comment_authors: Vec<String>,
+    pub comments: Vec<JsComment>,
+    pub picture_count: u32,
+}
+
+impl From<SheetInspection> for JsSheetInspection {
+    fn from(s: SheetInspection) -> Self {
+        Self {
+            dimension: s.dimension,
+            tab_color: s.tab_color.map(JsColor::from),
+            pane: s.pane.map(|p| JsPane {
+                x_split: p.x_split,
+                y_split: p.y_split,
+                top_left_cell: p.top_left_cell,
+                state: p.state,
+            }),
+            cols: s
+                .cols
+                .into_iter()
+                .map(|c| JsColumnRange {
+                    first_col: c.first_col,
+                    last_col: c.last_col,
+                    width: c.width,
+                    hidden: c.hidden,
+                    outline_level: c.outline_level,
+                })
+                .collect(),
+            hidden_rows: s.hidden_rows,
+            merge_cells: s.merge_cells,
+            hyperlinks: s
+                .hyperlinks
+                .into_iter()
+                .map(|h| JsHyperlink {
+                    reference: h.reference,
+                    target: h.target,
+                    location: h.location,
+                    tooltip: h.tooltip,
+                    display: h.display,
+                })
+                .collect(),
+            tables: s
+                .tables
+                .into_iter()
+                .map(|t| JsTable {
+                    name: t.name,
+                    display_name: t.display_name,
+                    reference: t.reference,
+                    header_row_count: t.header_row_count,
+                    totals_row_count: t.totals_row_count,
+                    table_columns: t
+                        .columns
+                        .into_iter()
+                        .map(|c| JsTableColumn {
+                            name: c.name,
+                            totals_row_function: c.totals_row_function,
+                            totals_row_label: c.totals_row_label,
+                            totals_row_formula: c.totals_row_formula,
+                            calculated_column_formula: c.calculated_column_formula,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            data_validations: s
+                .data_validations
+                .into_iter()
+                .map(|v| JsDataValidation {
+                    sqref: v.sqref,
+                    extension: v.extension,
+                    validation_type: v.validation_type,
+                    operator: v.operator,
+                    allow_blank: v.allow_blank,
+                    show_drop_down: v.show_drop_down,
+                    show_input_message: v.show_input_message,
+                    show_error_message: v.show_error_message,
+                    error_style: v.error_style,
+                    error_title: v.error_title,
+                    error: v.error,
+                    prompt_title: v.prompt_title,
+                    prompt: v.prompt,
+                    formula1: v.formula1,
+                    formula2: v.formula2,
+                })
+                .collect(),
+            conditional_formatting: s
+                .conditional_formatting
+                .into_iter()
+                .map(|f| JsConditionalFormatting {
+                    sqref: f.sqref,
+                    extension: f.extension,
+                    rules: f
+                        .rules
+                        .into_iter()
+                        .map(|r| JsCfRule {
+                            rule_type: r.rule_type,
+                            priority: r.priority,
+                            operator: r.operator,
+                            stop_if_true: r.stop_if_true,
+                            text: r.text,
+                            time_period: r.time_period,
+                            formulas: r.formulas,
+                            dxf_id: r.dxf_id,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            sheet_protection: s.sheet_protection.map(|p| JsSheetProtection {
+                password_protected: p.password_protected,
+                sheet: p.sheet,
+                objects: p.objects,
+                scenarios: p.scenarios,
+                format_cells: p.format_cells,
+                format_columns: p.format_columns,
+                format_rows: p.format_rows,
+                insert_columns: p.insert_columns,
+                insert_rows: p.insert_rows,
+                insert_hyperlinks: p.insert_hyperlinks,
+                delete_columns: p.delete_columns,
+                delete_rows: p.delete_rows,
+                select_locked_cells: p.select_locked_cells,
+                sort: p.sort,
+                auto_filter: p.auto_filter,
+                pivot_tables: p.pivot_tables,
+                select_unlocked_cells: p.select_unlocked_cells,
+            }),
+            auto_filter: s.auto_filter.map(|reference| JsAutoFilter { reference }),
+            comment_authors: s.comment_authors,
+            comments: s
+                .comments
+                .into_iter()
+                .map(|c| JsComment {
+                    reference: c.reference,
+                    author_ref: c.author_ref,
+                    text: c.text,
+                })
+                .collect(),
+            picture_count: s.picture_count,
+        }
+    }
+}
+
+/// Options for a sheet inspection.
+#[napi(object)]
+pub struct JsInspectSheetOptions {
+    /// Sheet to inspect.
+    pub sheet: String,
+    /// Bytes the parts read may expand to, the sheet part included.
+    pub max_decompressed_bytes: f64,
+}
+
+/// Inspect a sheet: everything it declares besides its cells.
+#[napi(
+    js_name = "inspectSheet",
+    ts_return_type = "Promise<JsSheetInspection>"
+)]
+pub fn js_inspect_sheet(
+    path: String,
+    options: JsInspectSheetOptions,
+) -> Result<AsyncTask<InspectSheetTask>> {
+    let max_decompressed_bytes = budget(options.max_decompressed_bytes, "maxDecompressedBytes")?;
+    Ok(AsyncTask::new(InspectSheetTask {
+        path: PathBuf::from(path),
+        sheet: options.sheet,
+        max_decompressed_bytes,
+    }))
+}
+
+pub struct InspectSheetTask {
+    path: PathBuf,
+    sheet: String,
+    max_decompressed_bytes: u64,
+}
+
+impl Task for InspectSheetTask {
+    type Output = JsSheetInspection;
+    type JsValue = JsSheetInspection;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        inspect_sheet(&self.path, &self.sheet, self.max_decompressed_bytes)
+            .map(JsSheetInspection::from)
+            .map_err(to_js_error)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+pub struct SheetsTask<R: Source> {
+    shared: Arc<Shared<R>>,
+}
+
+impl<R: Source> Task for SheetsTask<R> {
     type Output = Vec<JsSheetInfo>;
     type JsValue = Vec<JsSheetInfo>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        self.shared.with_reader(|reader| {
-            Ok(reader
-                .sheets()
-                .iter()
-                .map(|sheet| JsSheetInfo {
-                    name: sheet.name.clone(),
-                    visible: sheet.visible,
-                })
-                .collect())
-        })
+        self.shared
+            .with_reader(|reader| Ok(reader.sheets().iter().map(JsSheetInfo::from).collect()))
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -301,7 +1155,7 @@ impl Task for SheetsTask {
 }
 
 pub struct NextBatchTask {
-    shared: Arc<Shared>,
+    shared: Arc<Shared<XlsxReader>>,
     size: usize,
 }
 
@@ -319,11 +1173,16 @@ impl Task for NextBatchTask {
 
             // Shaped into its JavaScript form here, on the threadpool. All the
             // main thread has left to do is build the arrays themselves.
-            Ok(Some(
-                rows.into_iter()
-                    .map(|row| row.into_iter().map(to_js_cell).collect())
-                    .collect(),
-            ))
+            let mut positions = Vec::with_capacity(rows.len());
+            let mut values = Vec::with_capacity(rows.len());
+            for row in rows {
+                positions.push(row.row);
+                values.push(row.values.into_iter().map(to_js_cell).collect());
+            }
+            Ok(Some(JsRowBatch {
+                positions,
+                rows: values,
+            }))
         })
     }
 

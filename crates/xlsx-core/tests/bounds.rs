@@ -125,9 +125,9 @@ fn a_batch_comes_back_short_rather_than_holding_a_wide_sheet_whole() {
         batch.len()
     );
     assert!(
-        batch.len() * batch[0].len() <= 1 << 20,
+        batch.len() * batch[0].values.len() <= 1 << 20,
         "batch holds {} values",
-        batch.len() * batch[0].len()
+        batch.len() * batch[0].values.len()
     );
 
     // And the rest of the sheet still comes through, batch after batch.
@@ -273,5 +273,252 @@ fn selecting_another_sheet_gives_that_sheet_its_own_row_budget() {
             rows += batch.len();
         }
         assert_eq!(rows, 31, "{sheet}");
+    }
+}
+
+#[test]
+fn the_cell_budget_is_raised_on_the_cell_that_crosses_it_not_at_the_end_of_the_sheet() {
+    use xlsx_core::{CellReaderOptions, XlsxCells};
+
+    let mut reader = XlsxCells::open(
+        &fixture("large-200000"),
+        CellReaderOptions {
+            max_decompressed_bytes: 1 << 30,
+            max_cells: 1_000,
+        },
+    )
+    .expect("open");
+
+    let mut delivered = 0;
+    let error = loop {
+        match reader.next_batch(256) {
+            Ok(Some(batch)) => delivered += batch.len(),
+            Ok(None) => panic!("the whole sheet was read past a budget of 1 000 cells"),
+            Err(error) => break error,
+        }
+    };
+
+    assert_eq!(error, ReadError::CellBudgetExceeded { limit: 1_000 });
+    assert_eq!(error.code(), "CELL_BUDGET_EXCEEDED");
+    assert!(delivered <= 1_000, "{delivered} cells handed over");
+}
+
+#[test]
+fn a_shared_formula_index_sizes_nothing() {
+    use xlsx_core::{CellReaderOptions, XlsxCells};
+
+    // `si="1000000000000"`: a table sized by it would abort the process.
+    let mut reader = XlsxCells::open(
+        &fixture("bomb-shared-formula"),
+        CellReaderOptions {
+            max_decompressed_bytes: 1 << 20,
+            max_cells: 10,
+        },
+    )
+    .expect("open");
+
+    let mut formulas = Vec::new();
+    while let Some(batch) = reader.next_batch(10).expect("batch") {
+        formulas.extend(
+            batch
+                .into_iter()
+                .filter_map(|cell| cell.formula.map(|formula| formula.text)),
+        );
+    }
+    assert_eq!(formulas, vec!["A1*2", "A2*2"]);
+}
+
+#[test]
+fn text_the_cells_copy_is_charged_against_the_byte_budget() {
+    use xlsx_core::{CellReaderOptions, XlsxCells};
+
+    // Each archive inflates to well under the budget; its cells copy 256 MiB.
+    for name in ["bomb-shared-formula-text", "bomb-shared-string-copies"] {
+        let mut reader = XlsxCells::open(
+            &fixture(name),
+            CellReaderOptions {
+                max_decompressed_bytes: EIGHT_MIB,
+                max_cells: 1 << 20,
+            },
+        )
+        .expect("open within budget");
+
+        let mut delivered = 0;
+        let error = loop {
+            match reader.next_batch(1 << 16) {
+                Ok(Some(batch)) => delivered += batch.len(),
+                Ok(None) => panic!("{name}: the copies were not charged"),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error.code(), "DECOMPRESSED_BUDGET_EXCEEDED", "{name}");
+        assert_eq!(delivered, 0, "{name}: refused within the first batch");
+    }
+}
+
+#[test]
+fn the_second_reading_of_the_cells_is_charged_against_the_byte_budget() {
+    use xlsx_core::{CellReaderOptions, XlsxCells};
+
+    let path = fixture("sheets-2");
+    // Exactly what the archive expands to: enough to open it, not enough to
+    // inflate a sheet a second time.
+    let total = XlsxReader::open(&path, budget(1 << 30, 1 << 20))
+        .expect("open")
+        .decompressed_bytes();
+
+    let mut reader = XlsxCells::open(
+        &path,
+        CellReaderOptions {
+            max_decompressed_bytes: total,
+            max_cells: 1 << 20,
+        },
+    )
+    .expect("open within budget");
+
+    let error = loop {
+        match reader.next_batch(1_000) {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the second reading was not charged"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(error.code(), "DECOMPRESSED_BUDGET_EXCEEDED");
+}
+
+#[test]
+fn an_inflated_styles_table_is_refused_under_the_byte_budget() {
+    let error =
+        xlsx_core::inspect_workbook(&fixture("bomb-styles"), EIGHT_MIB).expect_err("must refuse");
+
+    assert_eq!(
+        error,
+        ReadError::DecompressedBudgetExceeded {
+            limit: EIGHT_MIB,
+            entry: "\"xl/styles.xml\"".into(),
+        }
+    );
+}
+
+#[test]
+fn styles_sharing_a_font_hold_it_once() {
+    // A 4 MiB font name and 100 000 styles referring to it, within the budget:
+    // copied into each style, that is 400 GiB.
+    let inspection =
+        xlsx_core::inspect_workbook(&fixture("bomb-styles-shared"), EIGHT_MIB).expect("inspect");
+
+    assert_eq!(inspection.fonts.len(), 1);
+    assert_eq!(inspection.styles.len(), 100_000);
+    assert!(inspection
+        .styles
+        .iter()
+        .all(|style| style.font_ref == Some(0)));
+}
+
+#[test]
+fn an_inspection_is_bounded_on_the_parts_it_reads_like_a_peek() {
+    for name in ["bomb-workbook", "bomb-package-rels", "bomb-rels"] {
+        let error =
+            xlsx_core::inspect_workbook(&fixture(name), EIGHT_MIB).expect_err("must refuse");
+        assert_eq!(error.code(), "DECOMPRESSED_BUDGET_EXCEEDED", "{name}");
+    }
+    let error =
+        xlsx_core::inspect_workbook(&fixture("bomb-entries"), EIGHT_MIB).expect_err("must refuse");
+    assert_eq!(error.code(), "TOO_MANY_ENTRIES");
+}
+
+#[test]
+fn an_inflated_comments_part_is_refused_under_the_byte_budget() {
+    let error = xlsx_core::inspect_sheet(&fixture("bomb-comments"), "Data", EIGHT_MIB)
+        .expect_err("must refuse");
+
+    assert_eq!(
+        error,
+        ReadError::DecompressedBudgetExceeded {
+            limit: EIGHT_MIB,
+            entry: "\"xl/comments1.xml\"".into(),
+        }
+    );
+}
+
+#[test]
+fn comments_sharing_an_author_hold_it_once() {
+    // A 4 MiB author name and 20 000 comments referring to it, within the
+    // budget: copied into each comment, that is 80 GiB.
+    let inspection = xlsx_core::inspect_sheet(&fixture("bomb-comment-authors"), "Data", EIGHT_MIB)
+        .expect("inspect");
+
+    assert_eq!(inspection.comment_authors.len(), 1);
+    assert_eq!(inspection.comments.len(), 20_000);
+    assert!(inspection
+        .comments
+        .iter()
+        .all(|comment| comment.author_ref == Some(0)));
+}
+
+#[test]
+fn hyperlink_targets_copied_past_the_byte_budget_are_refused() {
+    // A 4 MiB target and 1 000 hyperlinks naming it: the parts fit in the
+    // budget, the copies the links receive do not.
+    let error = xlsx_core::inspect_sheet(&fixture("bomb-hyperlink-targets"), "Data", EIGHT_MIB)
+        .expect_err("must refuse");
+
+    assert_eq!(
+        error,
+        ReadError::DecompressedBudgetExceeded {
+            limit: EIGHT_MIB,
+            entry: "\"hyperlink targets copied from xl/worksheets/_rels/sheet1.xml.rels\"".into(),
+        }
+    );
+}
+
+#[test]
+fn records_built_past_the_byte_budget_are_refused() {
+    // Empty validations and one-letter ranges: about 7 MB of XML, within the
+    // budget, building records many times that.
+    let error = xlsx_core::inspect_sheet(&fixture("bomb-sheet-records"), "Data", EIGHT_MIB)
+        .expect_err("must refuse");
+
+    assert_eq!(
+        error,
+        ReadError::DecompressedBudgetExceeded {
+            limit: EIGHT_MIB,
+            entry: "\"records produced from xl/worksheets/sheet1.xml\"".into(),
+        }
+    );
+}
+
+#[test]
+fn a_sheet_part_streaming_past_the_byte_budget_is_refused() {
+    // Ordinary cells the inspection skips, and no metadata: no record is
+    // built, so only the bytes of the part as it streams can refuse it.
+    let error = xlsx_core::inspect_sheet(&fixture("bomb-sheet-cells"), "Data", EIGHT_MIB)
+        .expect_err("must refuse");
+
+    assert_eq!(
+        error,
+        ReadError::DecompressedBudgetExceeded {
+            limit: EIGHT_MIB,
+            entry: "\"xl/worksheets/sheet1.xml\"".into(),
+        }
+    );
+}
+
+#[test]
+fn sheet_metadata_building_records_past_the_byte_budget_is_refused() {
+    // Merged ranges and validations sit in the sheet part itself, on a sheet
+    // of one cell: the records built from them cross the budget before the
+    // part alone does.
+    for name in ["bomb-merges", "bomb-validations"] {
+        let error =
+            xlsx_core::inspect_sheet(&fixture(name), "Data", EIGHT_MIB).expect_err("must refuse");
+        assert_eq!(
+            error,
+            ReadError::DecompressedBudgetExceeded {
+                limit: EIGHT_MIB,
+                entry: "\"records produced from xl/worksheets/sheet1.xml\"".into(),
+            },
+            "{name}"
+        );
     }
 }

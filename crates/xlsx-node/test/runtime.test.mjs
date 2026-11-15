@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { xlsxRows } from "../lib/index.js";
+import { readRows } from "../lib/index.js";
 import {
   PERMISSIVE,
   fixture as fixtureFile,
@@ -23,7 +23,7 @@ test("a long read does not hold the event loop", async () => {
   let rows = 0;
 
   const { ticks, worstGapMs, durationMs } = await timerCadence(async () => {
-    const stream = xlsxRows(fixtureFile("large-600000"), {
+    const stream = readRows(fixtureFile("large-600000"), {
       maxDecompressedBytes: 1 << 30,
       maxRows: 1_000_000,
     });
@@ -56,13 +56,13 @@ test("six hundred thousand rows read under the memory ceiling", () => {
     let rows = 0;
     let dates = 0;
 
-    for await (const row of xlsxRows(${JSON.stringify(fixtureFile("large-600000"))}, {
+    for await (const row of readRows(${JSON.stringify(fixtureFile("large-600000"))}, {
       maxDecompressedBytes: ${1 << 30},
       maxRows: 1_000_000,
     })) {
       rows += 1;
       // Column B is a date column: it must not come out as a serial number.
-      if (typeof row[1] === "string" && row[1].endsWith("Z")) dates += 1;
+      if (typeof row.values[1] === "string" && row.values[1].endsWith("Z")) dates += 1;
     }
 
     process.stdout.write(JSON.stringify({ rows, dates, peakRss: peakRss() }));
@@ -92,7 +92,7 @@ test("destroying a stream mid-read does not hold the event loop", async () => {
   // an upload and cutting it.
   const before = openDescriptors();
 
-  const stream = xlsxRows(fixtureFile("large-600000"), {
+  const stream = readRows(fixtureFile("large-600000"), {
     maxDecompressedBytes: 1 << 30,
     maxRows: 1_000_000,
   });
@@ -133,7 +133,7 @@ test("breaking out of the loop closes the archive", async () => {
   const file = fixtureFile("large-200000");
 
   // One read first: the process opens things lazily, and that is not a leak.
-  for await (const _row of xlsxRows(file, PERMISSIVE)) {
+  for await (const _row of readRows(file, PERMISSIVE)) {
     break;
   }
 
@@ -154,7 +154,7 @@ test("breaking out of the loop closes the archive", async () => {
   const abandoned = [];
 
   for (let run = 0; run < 20; run += 1) {
-    const rows = xlsxRows(file, PERMISSIVE);
+    const rows = readRows(file, PERMISSIVE);
     abandoned.push(rows);
 
     let seen = 0;
@@ -179,13 +179,13 @@ test("dates ignore the process timezone", () => {
   // to be worth testing at all.
   const body = `
     const rows = [];
-    for await (const row of xlsxRows(${JSON.stringify(fixtureFile("types"))}, {
+    for await (const row of readRows(${JSON.stringify(fixtureFile("types"))}, {
       maxDecompressedBytes: 1048576,
       maxRows: 10,
     })) {
       rows.push(row);
     }
-    process.stdout.write(JSON.stringify(rows[0].slice(7, 9)));
+    process.stdout.write(JSON.stringify(rows[0].values.slice(7, 9)));
   `;
 
   const kiritimati = runInChild(body, { TZ: "Pacific/Kiritimati" }); // UTC+14

@@ -5,7 +5,8 @@
  *
  * Everything below the line — the native cursor, the batch protocol, the way an
  * error code crosses the FFI boundary — is an implementation detail. What a
- * consumer gets is a `Readable` in object mode and a way to list sheets.
+ * consumer gets is a `Readable` in object mode, a way to peek at the sheets, and
+ * two pure helpers between A1 references and 0-based positions.
  *
  * What this package deliberately does not do: read CSV or ODS, recompute
  * formulas, edit a workbook that already exists, or offer a synchronous API.
@@ -22,10 +23,13 @@ const { once } = require("node:events");
  *
  * `code` is the stable discriminant. Reading raises `NOT_AN_ARCHIVE`,
  * `SHEET_NOT_FOUND`, `DECOMPRESSED_BUDGET_EXCEEDED`, `TOO_MANY_ENTRIES`,
- * `ROW_BUDGET_EXCEEDED` or `CORRUPT`; writing raises `INVALID_DATETIME`,
+ * `ROW_BUDGET_EXCEEDED`, `CELL_BUDGET_EXCEEDED` or `CORRUPT`; writing raises `INVALID_DATETIME`,
  * `INVALID_VALUE`, `SHEET_LIMIT_EXCEEDED`, `INVALID_SHEET_NAME` or
  * `WRITE_FAILED`; either raises `IO`, `INVALID_OPTION`, `CLOSED` or
  * `UNSUPPORTED_PLATFORM`. Branch on it rather than on the message.
+ *
+ * The set of codes is open: a minor version may add one, so a `switch` over
+ * `code` keeps a default branch.
  */
 class XlsxError extends Error {
   constructor(code, message, options) {
@@ -37,8 +41,11 @@ class XlsxError extends Error {
 
 const {
   XlsxCursor,
+  XlsxCellCursor,
   XlsxSink,
-  listSheets: listSheetsNative,
+  peekSheets: peekSheetsNative,
+  inspectWorkbook: inspectWorkbookNative,
+  inspectSheet: inspectSheetNative,
   validateSheetName,
 } = loadNativeBinding();
 
@@ -122,36 +129,27 @@ function requirePath(path) {
 }
 
 /**
- * A worksheet as a stream of rows.
+ * A worksheet pulled from a native cursor, one batch at a time.
  *
- * One row is an array of values placed at their column index: a cell missing in
- * the middle of a row leaves `null` at its position rather than shifting its
- * neighbours left, and rows are padded to the width of the widest row seen. A
- * date arrives as an ISO 8601 string in UTC.
+ * What a batch turns into is the subclass's business (`_pushBatch`); the pulling,
+ * the ordering and the release of the archive are the same for rows and cells.
  */
-class XlsxRows extends Readable {
+class SheetStream extends Readable {
   #cursor;
   #batchSize;
   #pulling = false;
   #done = false;
 
-  constructor(path, options) {
-    const batchSize = requireBatchSize(options);
-
+  constructor(cursor, batchSize) {
     super({ objectMode: true, highWaterMark: batchSize });
-
+    this.#cursor = cursor;
     this.#batchSize = batchSize;
-    this.#cursor = new XlsxCursor(requirePath(path), {
-      sheet: options?.sheet,
-      maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
-      maxRows: requireBudget(options, "maxRows"),
-    });
   }
 
   /**
    * The sheets the workbook declares.
    *
-   * Reading this from the stream rather than through `listSheets` opens the
+   * Reading this from the stream rather than through `peekSheets` opens the
    * archive once instead of twice, which matters: opening charges the
    * decompressed-byte budget over the whole file. If `sheet` was given, it must
    * name a sheet that exists — the selection happens on the same open.
@@ -183,9 +181,7 @@ class XlsxRows extends Readable {
           return;
         }
 
-        for (const row of batch) {
-          this.push(row);
-        }
+        this._pushBatch(batch);
       },
       (error) => {
         this.#pulling = false;
@@ -207,19 +203,147 @@ class XlsxRows extends Readable {
 }
 
 /**
- * List the sheets of a workbook.
+ * A worksheet as a stream of rows.
+ *
+ * One row is `{ row, values }`: `row` is its 0-based position in the sheet, and
+ * `values` its values placed at their column index. A cell missing in the
+ * middle of a row leaves `null` at its position rather than shifting its
+ * neighbours left, and rows are padded to the width of the widest row seen.
+ * Rows the file does not carry are not emitted, so `row` can skip. A date
+ * arrives as an ISO 8601 string in UTC.
+ */
+class XlsxRows extends SheetStream {
+  constructor(path, options) {
+    const batchSize = requireBatchSize(options);
+    super(
+      new XlsxCursor(requirePath(path), {
+        sheet: options?.sheet,
+        maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
+        maxRows: requireBudget(options, "maxRows"),
+      }),
+      batchSize,
+    );
+  }
+
+  _pushBatch({ positions, rows }) {
+    for (let i = 0; i < rows.length; i++) {
+      this.push({ row: positions[i], values: rows[i] });
+    }
+  }
+}
+
+/** Cell types by the code the binding sends them as; the same order as its own. */
+const CELL_TYPES = [
+  "string",
+  "number",
+  "boolean",
+  "date",
+  "duration",
+  "error",
+  "empty",
+];
+
+/**
+ * A worksheet as a stream of the cells it declares, in document order.
+ *
+ * One cell is `{ row, col, type, value, styleId }`, plus `formula` when it has
+ * one. A cell the file declares without a value — one that only carries a
+ * style — comes out with `type: "empty"` and `value: null`; a position the file
+ * declares nothing at does not come out at all.
+ */
+class XlsxCells extends SheetStream {
+  constructor(path, options) {
+    const batchSize = requireBatchSize(options);
+    super(
+      new XlsxCellCursor(requirePath(path), {
+        sheet: options?.sheet,
+        maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
+        maxCells: requireBudget(options, "maxCells"),
+      }),
+      batchSize,
+    );
+  }
+
+  _pushBatch({ rows, cols, types, values, styleIds, formulaCells, formulas }) {
+    let next = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const cell = {
+        row: rows[i],
+        col: cols[i],
+        type: CELL_TYPES[types[i]],
+        value: values[i],
+        styleId: styleIds[i],
+      };
+      if (next < formulaCells.length && formulaCells[next] === i) {
+        const { text, type, ref } = formulas[next];
+        cell.formula = ref == null ? { text, type } : { text, type, ref };
+        next += 1;
+      }
+      this.push(cell);
+    }
+  }
+}
+
+/**
+ * Peek at the sheets of a workbook.
  *
  * Reads two parts and no rows: the package relationships, to find where the
  * workbook lives, and the workbook itself. Both are inflated through a counter
  * and charged against the budget — which is why this takes one, and why a
- * listing does not cost a walk of the archive.
+ * peek does not cost a walk of the archive, whatever the size of the sheets.
  *
- * When you are going to read rows anyway, `xlsxRows(...).sheets()` answers the
+ * When you are going to read rows anyway, `readRows(...).sheets()` answers the
  * same question off the open you were about to pay for.
  */
-async function listSheets(path, options) {
+async function peekSheets(path, options) {
   try {
-    return await listSheetsNative(requirePath(path), {
+    return await peekSheetsNative(requirePath(path), {
+      maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
+    });
+  } catch (error) {
+    throw lift(error);
+  }
+}
+
+/**
+ * Inspect a workbook: its sheets, defined names, document properties, date
+ * system, which kinds of parts it carries, and its cell styles with the
+ * number formats, fonts and fills they refer to by index.
+ *
+ * Reads the package and workbook relationships, the workbook, the two
+ * properties parts and the styles — each charged against
+ * `maxDecompressedBytes` — and no sheet. Every value is restored as the file
+ * declares it: a theme colour stays a theme index, a defined name keeps its
+ * `#REF!`.
+ */
+async function inspectWorkbook(path, options) {
+  try {
+    return await inspectWorkbookNative(requirePath(path), {
+      maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
+    });
+  } catch (error) {
+    throw lift(error);
+  }
+}
+
+/**
+ * Inspect one sheet: everything it declares besides its cells — merged ranges,
+ * validations, conditional formats, tables, comments, links, panes, hidden
+ * columns and rows, protection, autofilter, pictures.
+ *
+ * The sheet part is streamed, cells skipped, and every part read — the ones it
+ * links to included — is charged against `maxDecompressedBytes`, as are the copy
+ * of its target each hyperlink receives and the memory every record built from
+ * those parts takes beyond its text.
+ */
+async function inspectSheet(path, options) {
+  try {
+    const sheet = options?.sheet;
+    if (typeof sheet !== "string" || sheet.length === 0) {
+      throw new XlsxError("INVALID_OPTION", "sheet is required");
+    }
+    return await inspectSheetNative(requirePath(path), {
+      sheet,
       maxDecompressedBytes: requireBudget(options, "maxDecompressedBytes"),
     });
   } catch (error) {
@@ -235,8 +359,107 @@ async function listSheets(path, options) {
  * needs to seek — walking the archive forward instead is the shortcut that
  * loses its tail. `diskStorage` already produces exactly what is needed.
  */
-function xlsxRows(path, options) {
+function readRows(path, options) {
   return new XlsxRows(path, options);
+}
+
+/**
+ * Read one worksheet as a stream of the cells it declares.
+ *
+ * For an inspection rather than an import: every cell comes with its type, its
+ * formula and the index of its style, and the sheet is read twice to get them —
+ * the second reading is charged against `maxDecompressedBytes` like the first.
+ * `maxCells` bounds what one sheet may yield.
+ */
+function readCells(path, options) {
+  return new XlsxCells(path, options);
+}
+
+/** Columns a worksheet holds, `XFD` being the last. */
+const MAX_COLUMNS = 16_384;
+
+/** Rows a worksheet holds. */
+const MAX_ROWS = 1_048_576;
+
+const A1_CELL = /^\$?([A-Za-z]{1,3})\$?([0-9]{1,7})$/;
+
+function parseCell(reference, whole) {
+  const match = A1_CELL.exec(reference);
+  if (!match) {
+    throw new XlsxError(
+      "INVALID_VALUE",
+      `${JSON.stringify(whole)} is not an A1 reference to a cell or a range of cells`,
+    );
+  }
+  let col = 0;
+  for (const letter of match[1].toUpperCase()) {
+    col = col * 26 + (letter.charCodeAt(0) - 64);
+  }
+  const row = Number(match[2]);
+  if (col > MAX_COLUMNS || row < 1 || row > MAX_ROWS) {
+    throw new XlsxError(
+      "INVALID_VALUE",
+      `${JSON.stringify(whole)} lies outside a worksheet, which spans A1:XFD1048576`,
+    );
+  }
+  return { row: row - 1, col: col - 1 };
+}
+
+/**
+ * Read an A1 reference into 0-based positions.
+ *
+ * `"B3"` is a single cell, its own start and end; `"A1:C10"` a range. The `$`
+ * of an absolute reference is ignored. A whole column (`A:A`), a whole row, a
+ * sheet-qualified reference and a list of ranges are not single ranges of
+ * cells and are refused.
+ *
+ * @throws {XlsxError} `INVALID_VALUE` when `ref` is not one, or lies outside
+ * the grid of a worksheet.
+ */
+function parseRef(ref) {
+  if (typeof ref !== "string") {
+    throw new XlsxError("INVALID_VALUE", "an A1 reference must be a string");
+  }
+  const parts = ref.split(":");
+  if (parts.length > 2) {
+    throw new XlsxError(
+      "INVALID_VALUE",
+      `${JSON.stringify(ref)} is not an A1 reference to a cell or a range of cells`,
+    );
+  }
+  const start = parseCell(parts[0], ref);
+  const end = parts.length === 2 ? parseCell(parts[1], ref) : { ...start };
+  return { start, end };
+}
+
+/**
+ * Spell a 0-based position as an A1 reference: `toA1({ row: 2, col: 1 })` is
+ * `"B3"`. Takes the shape `parseRef` returns, so a position read from one goes
+ * straight back into the other.
+ *
+ * @throws {XlsxError} `INVALID_VALUE` when the position is not an object whose
+ * `row` and `col` are integers within the grid of a worksheet.
+ */
+function toA1(position) {
+  const { row, col } = position ?? {};
+  if (
+    !Number.isInteger(row) ||
+    !Number.isInteger(col) ||
+    row < 0 ||
+    col < 0 ||
+    row >= MAX_ROWS ||
+    col >= MAX_COLUMNS
+  ) {
+    throw new XlsxError(
+      "INVALID_VALUE",
+      `{ row: ${String(row)}, col: ${String(col)} } is not a 0-based position within a worksheet`,
+    );
+  }
+  let letters = "";
+  for (let n = col + 1; n > 0; n = Math.floor((n - 1) / 26)) {
+    letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters;
+  }
+  return `${letters}${row + 1}`;
 }
 
 /** Rows per FFI round trip on the writing side. */
@@ -524,7 +747,7 @@ class XlsxWriteStream extends Transform {
     } else if (
       value !== null &&
       typeof value === "object" &&
-      Array.isArray(value.data)
+      Array.isArray(value.values)
     ) {
       // A row that says where it goes. Nothing is implied by position, so a
       // source that is not sorted by sheet streams as it is, and reordering the
@@ -533,19 +756,19 @@ class XlsxWriteStream extends Transform {
         callback(
           new XlsxError(
             "INVALID_VALUE",
-            'a row object needs a non-empty `sheet`, as in { sheet: "Q2", data: [...] }',
+            'a row object needs a non-empty `sheet`, as in { sheet: "Q2", values: [...] }',
           ),
         );
         return;
       }
       name = value.sheet;
-      data = value.data;
+      data = value.values;
     } else {
       callback(
         new XlsxError(
           "INVALID_VALUE",
           `${value === null ? "null" : typeof value} is not a row; pass an array of ` +
-            'cell values, or { sheet: "Q2", data: [...] } to name the sheet it goes to',
+            'cell values, or { sheet: "Q2", values: [...] } to name the sheet it goes to',
         ),
       );
       return;
@@ -731,15 +954,15 @@ class XlsxWriteStream extends Transform {
 /**
  * Write one or more worksheets as a stream of rows.
  *
- * A bare array is a row of the sheet named by `sheet`; `{ sheet, data }` names
- * the sheet it goes to, so a source that is not sorted by sheet streams as it
- * is. Values sit at their column index and `null` leaves a blank without
+ * A bare array is a row of the sheet named by `sheet`; `{ sheet, values }`
+ * names the sheet it goes to, so a source that is not sorted by sheet streams
+ * as it is. Values sit at their column index and `null` leaves a blank without
  * shifting its neighbours.
  *
  * ```js
  * await pipeline(
  *   Readable.from(records, { objectMode: true }),
- *   xlsxWriteStream({
+ *   writeWorkbook({
  *     sheet: "Q1",
  *     columns: [{ header: "Client" }],
  *     sheets: { Q2: { columns: [{ header: "Signed", type: "date" }] } },
@@ -752,15 +975,21 @@ class XlsxWriteStream extends Transform {
  * files rather than being held. That spill is real disk — see `tempDir` if the
  * platform temporary directory is memory-backed.
  */
-function xlsxWriteStream(options) {
+function writeWorkbook(options) {
   return new XlsxWriteStream(options);
 }
 
 module.exports = {
-  listSheets,
-  xlsxRows,
-  xlsxWriteStream,
+  peekSheets,
+  inspectWorkbook,
+  inspectSheet,
+  readRows,
+  readCells,
+  writeWorkbook,
+  parseRef,
+  toA1,
   XlsxError,
   XlsxRows,
+  XlsxCells,
   XlsxWriteStream,
 };

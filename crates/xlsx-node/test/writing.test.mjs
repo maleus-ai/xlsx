@@ -8,12 +8,13 @@ import { pipeline } from "node:stream/promises";
 
 import {
   collect,
+  collectRows,
   PERMISSIVE,
   runInChild,
   settledDescriptors,
   timerCadence,
 } from "./helpers.mjs";
-import { xlsxRows, xlsxWriteStream, XlsxError } from "../lib/index.js";
+import { readRows, writeWorkbook, XlsxError } from "../lib/index.js";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "xlsx-writing-"));
 test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
@@ -27,10 +28,10 @@ async function roundTrip(name, rows, options = {}) {
   const file = output(name);
   await pipeline(
     Readable.from(rows, { objectMode: true }),
-    xlsxWriteStream(options),
+    writeWorkbook(options),
     fs.createWriteStream(file),
   );
-  return { file, rows: await collect(xlsxRows(file, PERMISSIVE)) };
+  return { file, rows: await collect(readRows(file, PERMISSIVE)) };
 }
 
 test("a workbook written here is one this package can read back", async () => {
@@ -42,6 +43,22 @@ test("a workbook written here is one this package can read back", async () => {
   assert.deepEqual(rows, [
     ["Ada", 42.5, true],
     ["Grace", -0.125, false],
+  ]);
+});
+
+test("reading back what was just written gives the same values with their row numbers", async () => {
+  const file = output("round-trip-rows");
+  await pipeline(
+    Readable.from([["Ada"], [null], ["Grace"]], { objectMode: true }),
+    writeWorkbook({ columns: [{ header: "Name" }] }),
+    fs.createWriteStream(file),
+  );
+
+  assert.deepEqual(await collectRows(readRows(file, PERMISSIVE)), [
+    { row: 0, values: ["Name"] },
+    { row: 1, values: ["Ada"] },
+    // A row of blanks writes no cell, so the file carries no row there.
+    { row: 3, values: ["Grace"] },
   ]);
 });
 
@@ -65,7 +82,7 @@ test("a Date outside a declared date column is refused, and says how to fix it",
   await assert.rejects(
     pipeline(
       Readable.from([[new Date("2024-03-25T00:00:00Z")]], { objectMode: true }),
-      xlsxWriteStream({}),
+      writeWorkbook({}),
       fs.createWriteStream(output("undeclared-date")),
     ),
     (thrown) => {
@@ -115,7 +132,7 @@ test("the sheet carries the name it was given", async () => {
   const { file } = await roundTrip("sheet-name", [["x"]], {
     sheet: "Trimestre 1",
   });
-  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  const sheets = await readRows(file, PERMISSIVE).sheets();
   assert.deepEqual(
     sheets.map((sheet) => sheet.name),
     ["Trimestre 1"],
@@ -124,7 +141,7 @@ test("the sheet carries the name it was given", async () => {
 
 test("a sheet name Excel refuses is refused here", async () => {
   assert.throws(
-    () => xlsxWriteStream({ sheet: "a/b" }),
+    () => writeWorkbook({ sheet: "a/b" }),
     (error) => {
       assert.equal(error.code, "INVALID_SHEET_NAME");
       return true;
@@ -137,7 +154,7 @@ test("nothing is readable until the rows are in", async () => {
   // Rows spill to a temporary file as they arrive and the archive is built from
   // them at the end, so a caller waiting for a first chunk mid-import would wait
   // for something that cannot come.
-  const stream = xlsxWriteStream({});
+  const stream = writeWorkbook({});
   let bytesBeforeEnd = 0;
   stream.on("data", (chunk) => {
     bytesBeforeEnd += chunk.length;
@@ -158,7 +175,7 @@ test("nothing is readable until the rows are in", async () => {
 test("the output arrives in pieces rather than as one buffer", async () => {
   // What makes the readable side worth having: a consumer sees the file in
   // fragments it can forward, not a single allocation of the whole thing.
-  const stream = xlsxWriteStream({});
+  const stream = writeWorkbook({});
   const sizes = [];
   stream.on("data", (chunk) => sizes.push(chunk.length));
 
@@ -184,7 +201,7 @@ test("abandoning the stream gives the spill file back", async () => {
   const before = await settledDescriptors();
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const stream = xlsxWriteStream({});
+    const stream = writeWorkbook({});
     for (let row = 0; row < 200; row += 1) {
       stream.write([`row-${row}`, row]);
     }
@@ -210,11 +227,7 @@ test("a long export does not hold the event loop", async () => {
   );
 
   const { ticks, durationMs } = await timerCadence(() =>
-    pipeline(
-      rows,
-      xlsxWriteStream({}),
-      fs.createWriteStream(output("cadence")),
-    ),
+    pipeline(rows, writeWorkbook({}), fs.createWriteStream(output("cadence"))),
   );
 
   // Cadence, not absolute jitter: a loop that was held gives no ticks at all,
@@ -240,7 +253,7 @@ test("a full export holds its memory flat", () => {
     })(), { objectMode: true });
 
     let bytes = 0;
-    await pipeline(rows, xlsxWriteStream({ sheet: "Export" }), async function (source) {
+    await pipeline(rows, writeWorkbook({ sheet: "Export" }), async function (source) {
       for await (const chunk of source) { bytes += chunk.length; }
     });
 
@@ -268,11 +281,11 @@ test("a row can name the sheet it goes to", async () => {
       [
         ["Ada", 1],
         ["Grace", 2],
-        { sheet: "Q2", data: ["Alan", new Date("2024-03-25T00:00:00Z")] },
+        { sheet: "Q2", values: ["Alan", new Date("2024-03-25T00:00:00Z")] },
       ],
       { objectMode: true },
     ),
-    xlsxWriteStream({
+    writeWorkbook({
       sheet: "Q1",
       columns: [{ header: "Name" }, { header: "N" }],
       sheets: {
@@ -284,14 +297,14 @@ test("a row can name the sheet it goes to", async () => {
     fs.createWriteStream(file),
   );
 
-  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  const sheets = await readRows(file, PERMISSIVE).sheets();
   assert.deepEqual(
     sheets.map((s) => s.name),
     ["Q1", "Q2"],
   );
 
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Q1" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "Q1" })),
     [
       ["Name", "N"],
       ["Ada", 1],
@@ -299,7 +312,7 @@ test("a row can name the sheet it goes to", async () => {
     ],
   );
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Q2" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "Q2" })),
     [
       ["Client", "Signed"],
       ["Alan", "2024-03-25T00:00:00.000Z"],
@@ -313,10 +326,13 @@ test("each sheet carries its own date columns", async () => {
   // timestamp parser on the wrong sheet, or write a serial with no format.
   const file = output("per-sheet-dates");
   await pipeline(
-    Readable.from([["2024-03-25"], { sheet: "Dates", data: ["2024-03-25"] }], {
-      objectMode: true,
-    }),
-    xlsxWriteStream({
+    Readable.from(
+      [["2024-03-25"], { sheet: "Dates", values: ["2024-03-25"] }],
+      {
+        objectMode: true,
+      },
+    ),
+    writeWorkbook({
       sheet: "Text",
       sheets: { Dates: { columns: [{ type: "date" }] } },
     }),
@@ -324,11 +340,11 @@ test("each sheet carries its own date columns", async () => {
   );
 
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Text" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "Text" })),
     [["2024-03-25"]],
   );
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Dates" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "Dates" })),
     [["2024-03-25T00:00:00.000Z"]],
   );
 });
@@ -340,29 +356,29 @@ test("an unsorted source needs no sorting", async () => {
   await pipeline(
     Readable.from(
       [
-        { sheet: "A", data: ["a0"] },
-        { sheet: "B", data: ["b0"] },
-        { sheet: "A", data: ["a1"] },
-        { sheet: "C", data: ["c0"] },
-        { sheet: "B", data: ["b1"] },
-        { sheet: "A", data: ["a2"] },
+        { sheet: "A", values: ["a0"] },
+        { sheet: "B", values: ["b0"] },
+        { sheet: "A", values: ["a1"] },
+        { sheet: "C", values: ["c0"] },
+        { sheet: "B", values: ["b1"] },
+        { sheet: "A", values: ["a2"] },
       ],
       { objectMode: true },
     ),
-    xlsxWriteStream({ sheet: "A" }),
+    writeWorkbook({ sheet: "A" }),
     fs.createWriteStream(file),
   );
 
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "A" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "A" })),
     [["a0"], ["a1"], ["a2"]],
   );
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "B" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "B" })),
     [["b0"], ["b1"]],
   );
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "C" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "C" })),
     [["c0"]],
   );
 });
@@ -370,20 +386,20 @@ test("an unsorted source needs no sorting", async () => {
 test("naming the sheet a bare row would go to is the same sheet", async () => {
   const file = output("same-sheet-two-ways");
   await pipeline(
-    Readable.from([["bare"], { sheet: "Data", data: ["named"] }], {
+    Readable.from([["bare"], { sheet: "Data", values: ["named"] }], {
       objectMode: true,
     }),
-    xlsxWriteStream({ sheet: "Data" }),
+    writeWorkbook({ sheet: "Data" }),
     fs.createWriteStream(file),
   );
 
-  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  const sheets = await readRows(file, PERMISSIVE).sheets();
   assert.deepEqual(
     sheets.map((s) => s.name),
     ["Data"],
     "no second sheet was made",
   );
-  assert.deepEqual(await collect(xlsxRows(file, PERMISSIVE)), [
+  assert.deepEqual(await collect(readRows(file, PERMISSIVE)), [
     ["bare"],
     ["named"],
   ]);
@@ -397,8 +413,8 @@ test("a row object without a sheet name is a bad value, not a bad option", async
   // says INVALID_VALUE for the same class of problem.
   await assert.rejects(
     pipeline(
-      Readable.from([{ data: ["x"] }], { objectMode: true }),
-      xlsxWriteStream({}),
+      Readable.from([{ values: ["x"] }], { objectMode: true }),
+      writeWorkbook({}),
       fs.createWriteStream(output("nameless-sheet")),
     ),
     (error) => {
@@ -414,14 +430,14 @@ test("an export with no rows still carries its header", async () => {
   const file = output("no-rows");
   await pipeline(
     Readable.from([], { objectMode: true }),
-    xlsxWriteStream({
+    writeWorkbook({
       sheet: "Export",
       columns: [{ header: "Client" }, { header: "N" }],
     }),
     fs.createWriteStream(file),
   );
 
-  assert.deepEqual(await collect(xlsxRows(file, PERMISSIVE)), [
+  assert.deepEqual(await collect(readRows(file, PERMISSIVE)), [
     ["Client", "N"],
   ]);
 });
@@ -430,7 +446,7 @@ test("a declared sheet that receives nothing still exists", async () => {
   const file = output("declared-unused");
   await pipeline(
     Readable.from([["a"]], { objectMode: true }),
-    xlsxWriteStream({
+    writeWorkbook({
       sheet: "Export",
       columns: [{ header: "C" }],
       sheets: { Other: { columns: [{ header: "X" }] } },
@@ -438,13 +454,13 @@ test("a declared sheet that receives nothing still exists", async () => {
     fs.createWriteStream(file),
   );
 
-  const sheets = await xlsxRows(file, PERMISSIVE).sheets();
+  const sheets = await readRows(file, PERMISSIVE).sheets();
   assert.deepEqual(
     sheets.map((s) => s.name),
     ["Export", "Other"],
   );
   assert.deepEqual(
-    await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "Other" })),
+    await collect(readRows(file, { ...PERMISSIVE, sheet: "Other" })),
     [["X"]],
   );
 });
@@ -455,7 +471,7 @@ test("a bad name in sheets is refused where it is written", async () => {
   for (const name of ["a/b", "", "x".repeat(32), "ctrl\u0001"]) {
     assert.throws(
       () =>
-        xlsxWriteStream({ sheet: "Good", sheets: { [name]: { columns: [] } } }),
+        writeWorkbook({ sheet: "Good", sheets: { [name]: { columns: [] } } }),
       (error) => {
         assert.equal(
           error.code,
@@ -471,7 +487,7 @@ test("a bad name in sheets is refused where it is written", async () => {
 test("a control character in a sheet name is refused", async () => {
   // It reaches the workbook XML raw and leaves a file no strict parser opens.
   assert.throws(
-    () => xlsxWriteStream({ sheet: "Client\u0001A" }),
+    () => writeWorkbook({ sheet: "Client\u0001A" }),
     (error) => {
       assert.equal(error.code, "INVALID_SHEET_NAME");
       return true;
@@ -485,11 +501,11 @@ test("a workbook stops at its sheet ceiling", async () => {
     pipeline(
       Readable.from(
         (function* () {
-          for (let i = 0; i < 10; i += 1) yield { sheet: `S${i}`, data: [i] };
+          for (let i = 0; i < 10; i += 1) yield { sheet: `S${i}`, values: [i] };
         })(),
         { objectMode: true },
       ),
-      xlsxWriteStream({ sheet: "S0", maxSheets: 4 }),
+      writeWorkbook({ sheet: "S0", maxSheets: 4 }),
       fs.createWriteStream(output("sheet-ceiling")),
     ),
     (error) => {
@@ -502,7 +518,7 @@ test("a workbook stops at its sheet ceiling", async () => {
 test("columns given twice for one sheet are refused", async () => {
   assert.throws(
     () =>
-      xlsxWriteStream({
+      writeWorkbook({
         sheet: "Q1",
         columns: [],
         sheets: { Q1: { columns: [] } },
@@ -523,16 +539,16 @@ test("rows keep going to the right sheet across a large export", async () => {
       (function* () {
         for (let r = 0; r < 5_000; r += 1) yield [`a-${r}`];
         for (let r = 0; r < 3_000; r += 1)
-          yield { sheet: "B", data: [`b-${r}`] };
+          yield { sheet: "B", values: [`b-${r}`] };
       })(),
       { objectMode: true },
     ),
-    xlsxWriteStream({ sheet: "A" }),
+    writeWorkbook({ sheet: "A" }),
     fs.createWriteStream(file),
   );
 
-  const a = await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "A" }));
-  const b = await collect(xlsxRows(file, { ...PERMISSIVE, sheet: "B" }));
+  const a = await collect(readRows(file, { ...PERMISSIVE, sheet: "A" }));
+  const b = await collect(readRows(file, { ...PERMISSIVE, sheet: "B" }));
   assert.equal(a.length, 5_000);
   assert.equal(
     b.length,
@@ -572,12 +588,15 @@ test("an interleaved source batches as well as a sorted one", async () => {
             const sheet = interleaved
               ? `S${seed % SHEETS}`
               : `S${Math.floor((r * SHEETS) / ROWS)}`;
-            yield { sheet, data: [`row-${r}`, r, "2024-03-25T00:00:00.000Z"] };
+            yield {
+              sheet,
+              values: [`row-${r}`, r, "2024-03-25T00:00:00.000Z"],
+            };
           }
         })(),
         { objectMode: true },
       ),
-      xlsxWriteStream({
+      writeWorkbook({
         sheet: "S0",
         sheets: Object.fromEntries(
           Array.from({ length: SHEETS }, (_, i) => [`S${i}`, { columns }]),
@@ -614,17 +633,17 @@ test("every row of an interleaved source lands on its own sheet", async () => {
           const value = `${sheet}-${r}`;
           if (!expected.has(sheet)) expected.set(sheet, []);
           expected.get(sheet).push(value);
-          yield { sheet, data: [value] };
+          yield { sheet, values: [value] };
         }
       })(),
       { objectMode: true },
     ),
-    xlsxWriteStream({ sheet: "S0" }),
+    writeWorkbook({ sheet: "S0" }),
     fs.createWriteStream(file),
   );
 
   for (const [sheet, values] of expected) {
-    const rows = await collect(xlsxRows(file, { ...PERMISSIVE, sheet }));
+    const rows = await collect(readRows(file, { ...PERMISSIVE, sheet }));
     assert.deepEqual(
       rows.map((row) => row[0]),
       values,

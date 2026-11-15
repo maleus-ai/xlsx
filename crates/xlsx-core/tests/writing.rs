@@ -62,7 +62,7 @@ fn read_back(path: &Path) -> Vec<Vec<CellValue>> {
 
     let mut out = Vec::new();
     while let Some(batch) = reader.next_batch(1_000).expect("read a batch") {
-        out.extend(batch);
+        out.extend(batch.into_iter().map(|row| row.values));
     }
     out
 }
@@ -439,7 +439,7 @@ fn a_workbook_can_hold_several_sheets() {
     ] {
         reader.select(name).expect("select");
         let batch = reader.next_batch(10).expect("read").expect("a batch");
-        assert_eq!(batch[0][0], expected, "sheet {name}");
+        assert_eq!(batch[0].values[0], expected, "sheet {name}");
     }
 }
 
@@ -484,7 +484,7 @@ fn each_sheet_counts_its_own_rows() {
         1,
         "the second sheet must hold one row, not six"
     );
-    assert_eq!(batch[0][0], CellValue::Text("top".to_owned()));
+    assert_eq!(batch[0].values[0], CellValue::Text("top".to_owned()));
 }
 
 #[test]
@@ -516,7 +516,7 @@ fn dates_keep_their_format_on_a_later_sheet() {
     };
 
     assert_eq!(
-        rows[0][0],
+        rows[0].values[0],
         CellValue::DateTime("2024-03-25T00:00:00.000Z".to_owned()),
         "a date on a later sheet lost its number format"
     );
@@ -571,7 +571,7 @@ fn a_refused_sheet_name_leaves_the_workbook_untouched() {
     reader.select("Later").expect("select");
     let batch = reader.next_batch(10).expect("read").expect("a batch");
     assert_eq!(
-        batch[0][0],
+        batch[0].values[0],
         CellValue::Text("meant for Later".to_owned()),
         "the row landed on the wrong sheet"
     );

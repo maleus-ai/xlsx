@@ -10,6 +10,7 @@ repository.workspace = true
 calamine.workspace = true
 rust_xlsxwriter.workspace = true
 zip.workspace = true
+flate2.workspace = true
 quick-xml = { version = "0.41", features = ["encoding"] }
 
 [[bin]]

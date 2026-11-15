@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { listSheets, xlsxRows } from "../crates/xlsx-node/lib/index.js";
+import { peekSheets, readRows } from "../crates/xlsx-node/lib/index.js";
 
 const PERMISSIVE = { maxDecompressedBytes: 1 << 30, maxRows: 1_000_000 };
 
@@ -19,14 +19,14 @@ function peakRssMb() {
   return match ? Math.round(Number(match[1]) / 1024) : null;
 }
 
-const sheets = await listSheets("fixtures/out/sheets-4.xlsx", PERMISSIVE);
+const sheets = await peekSheets("fixtures/out/sheets-4.xlsx", PERMISSIVE);
 assert.deepEqual(
   sheets.map((sheet) => sheet.name),
   ["Sheet1", "Sheet2", "Sheet3", "Sheet4"],
 );
 
 let rows = 0;
-for await (const _row of xlsxRows(
+for await (const _row of readRows(
   "fixtures/out/large-600000.xlsx",
   PERMISSIVE,
 )) {
@@ -36,7 +36,7 @@ assert.equal(rows, 600_001);
 
 let refused = null;
 try {
-  for await (const _row of xlsxRows("fixtures/out/bomb-sharedstrings.xlsx", {
+  for await (const _row of readRows("fixtures/out/bomb-sharedstrings.xlsx", {
     maxDecompressedBytes: 8 * 1024 * 1024,
     maxRows: 1_000,
   })) {

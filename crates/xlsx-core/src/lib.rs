@@ -37,8 +37,9 @@
 //!
 //! while let Some(rows) = reader.next_batch(1_000)? {
 //!     for row in rows {
-//!         // row: Vec<CellValue>, values at their column index
-//!         let _ = row;
+//!         // row.row: 0-based position in the sheet; row.values: Vec<CellValue>,
+//!         // values at their column index
+//!         let _ = (row.row, row.values);
 //!     }
 //! }
 //! # Ok::<(), xlsx_core::ReadError>(())
@@ -48,16 +49,29 @@
 #![warn(clippy::all)]
 
 mod budget;
+mod cells;
 mod cursor;
 mod directory;
 mod error;
-mod list;
+mod inspect_sheet;
+mod inspect_workbook;
+mod peek;
 mod reader;
 mod value;
 mod writer;
+mod xml;
 
+pub use cells::{Cell, CellReaderOptions, CellType, Formula, FormulaType, XlsxCells};
 pub use error::ReadError;
-pub use reader::{ReaderOptions, SheetInfo, XlsxReader};
+pub use inspect_sheet::{
+    inspect_sheet, ColumnRange, Comment, ConditionalFormatRule, ConditionalFormatting,
+    DataValidation, Hyperlink, Pane, SheetInspection, SheetProtection, Table, TableColumn,
+};
+pub use inspect_workbook::{
+    inspect_workbook, Alignment, CellStyle, Color, DefinedName, DocumentProperties, Fill, Font,
+    GradientFill, GradientStop, NumFmt, PatternFill, WorkbookInspection, WorkbookParts,
+};
+pub use reader::{ReaderOptions, Row, SheetInfo, SheetState, XlsxReader};
 pub use value::CellValue;
 pub use writer::{
     validate_sheet_name, WriteError, WriterOptions, XlsxWriter, MAX_COLUMNS, MAX_ROWS, MAX_SHEETS,

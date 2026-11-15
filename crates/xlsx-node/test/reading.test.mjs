@@ -1,21 +1,63 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { listSheets, xlsxRows } from "../lib/index.js";
-import { PERMISSIVE, collect, fixture } from "./helpers.mjs";
+import { peekSheets, readRows } from "../lib/index.js";
+import { PERMISSIVE, collect, collectRows, fixture } from "./helpers.mjs";
 
-test("lists sheets with their visibility", async () => {
-  const sheets = await listSheets(fixture("hidden-sheets"), PERMISSIVE);
+test("restores visible, hidden and veryHidden as the workbook declares them", async () => {
+  const sheets = await peekSheets(fixture("hidden-sheets"), PERMISSIVE);
 
   assert.deepEqual(sheets, [
-    { name: "Data", visible: true },
-    { name: "Paramètres", visible: false },
-    { name: "Notes", visible: false },
+    { name: "Data", sheetId: 1, state: "visible" },
+    { name: "Paramètres", sheetId: 2, state: "hidden" },
+    { name: "Notes", sheetId: 3, state: "veryHidden" },
+  ]);
+});
+
+test("restores the declared sheetId, not the position of the tab", async () => {
+  const sheets = await peekSheets(fixture("sheet-ids"), PERMISSIVE);
+
+  assert.deepEqual(
+    sheets.map(({ name, sheetId }) => [name, sheetId]),
+    [
+      ["Synthèse", 7],
+      ["Données", 3],
+    ],
+  );
+});
+
+test("refuses a workbook whose sheet declares a state outside the format", async () => {
+  await assert.rejects(peekSheets(fixture("unknown-sheet-state"), PERMISSIVE), {
+    name: "XlsxError",
+    code: "CORRUPT",
+  });
+  await assert.rejects(
+    collect(readRows(fixture("unknown-sheet-state"), PERMISSIVE)),
+    { name: "XlsxError", code: "CORRUPT" },
+  );
+});
+
+test("numbers each row by its position in the sheet, gaps included", async () => {
+  const rows = await collectRows(readRows(fixture("sparse"), PERMISSIVE));
+
+  // Row 4 of the sheet is absent: the fourth row emitted sits at index 4.
+  assert.deepEqual(
+    rows.map((row) => row.row),
+    [0, 1, 2, 4],
+  );
+});
+
+test("numbers the first row emitted at its real position when the sheet starts lower", async () => {
+  const rows = await collectRows(readRows(fixture("starts-lower"), PERMISSIVE));
+
+  assert.deepEqual(rows, [
+    { row: 2, values: [null, null, 1, 2] },
+    { row: 4, values: [null, null, null, 3] },
   ]);
 });
 
 test("reads the first sheet when none is named", async () => {
-  const rows = await collect(xlsxRows(fixture("sheets-4"), PERMISSIVE));
+  const rows = await collect(readRows(fixture("sheets-4"), PERMISSIVE));
 
   assert.equal(rows.length, 31);
   assert.equal(rows[1][0], "Sheet1");
@@ -23,7 +65,7 @@ test("reads the first sheet when none is named", async () => {
 
 test("reads a sheet by name", async () => {
   const rows = await collect(
-    xlsxRows(fixture("sheets-8"), { ...PERMISSIVE, sheet: "Sheet6" }),
+    readRows(fixture("sheets-8"), { ...PERMISSIVE, sheet: "Sheet6" }),
   );
 
   assert.equal(rows.length, 31);
@@ -31,7 +73,7 @@ test("reads a sheet by name", async () => {
 });
 
 test("types every kind of cell", async () => {
-  const rows = await collect(xlsxRows(fixture("types"), PERMISSIVE));
+  const rows = await collect(readRows(fixture("types"), PERMISSIVE));
 
   assert.deepEqual(rows, [
     [
@@ -59,7 +101,7 @@ test("types every kind of cell", async () => {
 });
 
 test("the 1904 date system lands on the same day", async () => {
-  const rows = await collect(xlsxRows(fixture("dates-1904"), PERMISSIVE));
+  const rows = await collect(readRows(fixture("dates-1904"), PERMISSIVE));
 
   assert.deepEqual(rows, [
     ["2024-03-25T00:00:00.000Z", "2024-03-25T12:00:00.000Z"],
@@ -68,7 +110,7 @@ test("the 1904 date system lands on the same day", async () => {
 
 test("sparse rows keep their column index", async () => {
   for (const name of ["sparse", "sparse-nodim"]) {
-    const rows = await collect(xlsxRows(fixture(name), PERMISSIVE));
+    const rows = await collect(readRows(fixture(name), PERMISSIVE));
 
     // Row 4 is absent from the sheet and is not materialised.
     assert.equal(rows.length, 4, name);
@@ -81,7 +123,7 @@ test("sparse rows keep their column index", async () => {
 });
 
 test("the sheet list can be read from the stream, on one open", async () => {
-  const rows = xlsxRows(fixture("sheets-4"), PERMISSIVE);
+  const rows = readRows(fixture("sheets-4"), PERMISSIVE);
 
   assert.deepEqual(
     (await rows.sheets()).map((sheet) => sheet.name),
@@ -93,11 +135,11 @@ test("the sheet list can be read from the stream, on one open", async () => {
 });
 
 test("batch size does not change what comes out", async () => {
-  const reference = await collect(xlsxRows(fixture("sheets-2"), PERMISSIVE));
+  const reference = await collect(readRows(fixture("sheets-2"), PERMISSIVE));
 
   for (const batchSize of [1, 7, 10_000]) {
     const rows = await collect(
-      xlsxRows(fixture("sheets-2"), { ...PERMISSIVE, batchSize }),
+      readRows(fixture("sheets-2"), { ...PERMISSIVE, batchSize }),
     );
     assert.deepEqual(rows, reference, `batchSize ${batchSize}`);
   }
@@ -109,12 +151,12 @@ test("every tab of a sixteen-tab workbook reads through, twenty times over", asy
   const file = fixture("sheets-16");
 
   for (let run = 0; run < 20; run += 1) {
-    const sheets = await listSheets(file, PERMISSIVE);
+    const sheets = await peekSheets(file, PERMISSIVE);
     assert.equal(sheets.length, 16, `run ${run}`);
 
     for (const [index, sheet] of sheets.entries()) {
       const rows = await collect(
-        xlsxRows(file, { ...PERMISSIVE, sheet: sheet.name }),
+        readRows(file, { ...PERMISSIVE, sheet: sheet.name }),
       );
       assert.equal(rows.length, 31, `run ${run}, ${sheet.name}`);
       assert.equal(

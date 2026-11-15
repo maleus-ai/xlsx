@@ -27,9 +27,12 @@ pub enum ReadError {
     DecompressedBudgetExceeded {
         /// Budget the caller set, in bytes.
         limit: u64,
-        /// What was being read when the budget ran out: an archive member, or
-        /// the sheet whose own geometry asked for more blank values than the
-        /// budget allowed.
+        /// What was being read when the budget ran out: an archive member, the
+        /// sheet whose own geometry asked for more blank values than the
+        /// budget allowed, the sheet whose cells copied more shared text
+        /// than it allowed, the relationships part whose targets the
+        /// hyperlinks copied past it, or the part whose records took more
+        /// memory than it allowed.
         entry: String,
     },
 
@@ -50,6 +53,12 @@ pub enum ReadError {
     /// that crosses the budget, not at the end of the sheet.
     RowBudgetExceeded {
         /// Budget the caller set, in rows.
+        limit: u64,
+    },
+    /// The selected sheet declares more cells than `max_cells`. Raised on the
+    /// cell that crosses the budget, not at the end of the sheet.
+    CellBudgetExceeded {
+        /// Budget the caller set, in cells.
         limit: u64,
     },
 
@@ -83,6 +92,7 @@ impl ReadError {
             Self::DecompressedBudgetExceeded { .. } => "DECOMPRESSED_BUDGET_EXCEEDED",
             Self::TooManyEntries { .. } => "TOO_MANY_ENTRIES",
             Self::RowBudgetExceeded { .. } => "ROW_BUDGET_EXCEEDED",
+            Self::CellBudgetExceeded { .. } => "CELL_BUDGET_EXCEEDED",
             Self::Corrupt { .. } => "CORRUPT",
             Self::Io { .. } => "IO",
         }
@@ -112,6 +122,9 @@ impl fmt::Display for ReadError {
             ),
             Self::RowBudgetExceeded { limit } => {
                 write!(f, "sheet holds more than {limit} rows")
+            }
+            Self::CellBudgetExceeded { limit } => {
+                write!(f, "sheet declares more than {limit} cells")
             }
             Self::Corrupt { detail } => write!(f, "corrupt workbook: {detail}"),
             Self::Io { detail } => write!(f, "cannot read the file: {detail}"),

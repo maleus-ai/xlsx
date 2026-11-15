@@ -12,6 +12,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NODE_PKG="$ROOT/crates/xlsx-node"
 
 cd "$ROOT"
+node --test scripts/release-guard.test.mjs
 node fixtures/generate.mjs
 
 # Released, not debug: the suite asserts a peak RSS and an event loop that keeps

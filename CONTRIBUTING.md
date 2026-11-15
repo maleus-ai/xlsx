@@ -138,6 +138,14 @@ internal repository's lockfile) and
 regenerates `binding.js`, which carries it too. The next sync brings the bump
 here, and the release is a tag on that commit.
 
+The script refuses a version that `crates/xlsx-node/CHANGELOG.md` has no section
+for, and the first version of a new major — or any of its release candidates —
+without `crates/xlsx-node/migrations/<major>.0.0.md`. Write both before bumping.
+A recipe gives, for each breaking change, a stable id and four parts: how to
+find the affected code, the change, what changes without the compiler noticing,
+and how to verify it. A version with a prerelease suffix is published under the
+`next` dist-tag.
+
 The platform packages are not bumped: they do not exist until the release
 job creates them, and `prepare-npm-packages.mjs` gives them the manifest's
 version at that point. Committing their names to the manifest looks tidy and is

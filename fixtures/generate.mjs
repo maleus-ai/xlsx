@@ -290,6 +290,507 @@ async function buildHiddenSheets() {
   zip.close();
 }
 
+/// A workbook whose sheets are declared with explicit attributes, and nothing
+/// else in it: `sheets` is the list of `<sheet>` attribute strings, in order.
+async function buildDeclaredSheets(name, sheets) {
+  const zip = new ZipWriter(path.join(OUT_DIR, `${name}.xlsx`));
+  const wb =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ` +
+    `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+    `<sheets>` +
+    sheets
+      .map((attributes, i) => `<sheet ${attributes} r:id="rId${i + 1}"/>`)
+      .join("") +
+    `</sheets></workbook>`;
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(sheets.length, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", wb);
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(sheets.length, { sharedStrings: false }),
+  );
+  await zip.add("xl/styles.xml", STYLES);
+  for (let i = 0; i < sheets.length; i += 1) {
+    await zip.add(`xl/worksheets/sheet${i + 1}.xml`, smallSheet(i, 3));
+  }
+  zip.close();
+}
+
+/// Sheet identifiers that do not follow the tab order, as after a reorder.
+const buildSheetIds = () =>
+  buildDeclaredSheets("sheet-ids", [
+    `name="Synthèse" sheetId="7"`,
+    `name="Données" sheetId="3"`,
+  ]);
+
+/// A sheet state the format does not define.
+const buildUnknownSheetState = () =>
+  buildDeclaredSheets("unknown-sheet-state", [
+    `name="Data" sheetId="1"`,
+    `name="Secret" sheetId="2" state="secret"`,
+  ]);
+
+/// Entry names as some generators write them: `\` as the separator, and a case
+/// that differs from the targets the relationships declare.
+async function buildBackslashEntries() {
+  const zip = new ZipWriter(path.join(OUT_DIR, "backslash-entries.xlsx"));
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(2, { sharedStrings: false }),
+  );
+  await zip.add("_rels\\.rels", ROOT_RELS);
+  await zip.add("XL\\Workbook.xml", workbook(["Data", "Notes"]));
+  await zip.add(
+    "xl\\_rels\\workbook.xml.rels",
+    workbookRels(2, { sharedStrings: false }),
+  );
+  await zip.add("xl\\styles.xml", STYLES);
+  await zip.add("xl\\worksheets\\sheet1.xml", smallSheet(0, 3));
+  await zip.add("xl\\worksheets\\sheet2.xml", smallSheet(1, 3));
+  zip.close();
+}
+
+/// A sheet whose first cell is C3: two empty rows and two empty columns before
+/// any data, then a gap of one row.
+async function buildStartsLower() {
+  const zip = new ZipWriter(path.join(OUT_DIR, "starts-lower.xlsx"));
+  const sheet =
+    SHEET_OPEN +
+    `<row r="3"><c r="C3"><v>1</v></c><c r="D3"><v>2</v></c></row>` +
+    `<row r="5"><c r="D5"><v>3</v></c></row>` +
+    SHEET_CLOSE;
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(1, { sharedStrings: false }),
+  );
+  await zip.add("xl/styles.xml", STYLES);
+  await zip.add("xl/worksheets/sheet1.xml", sheet);
+  zip.close();
+}
+
+/// Formulas of every kind, cells that only carry a style, cells without `r`.
+async function buildFormulas() {
+  const zip = new ZipWriter(path.join(OUT_DIR, "formulas.xlsx"));
+  const sheet =
+    SHEET_OPEN +
+    // A shared formula: written once on C1, its range declared there, and
+    // reused by C2 and C3 with nothing but the shared index.
+    `<row r="1"><c r="A1"><v>2</v></c><c r="B1"><v>3</v></c>` +
+    `<c r="C1"><f t="shared" ref="C1:C3" si="0">A1*B1</f><v>6</v></c></row>` +
+    `<row r="2"><c r="A2"><v>4</v></c><c r="B2"><v>5</v></c>` +
+    `<c r="C2"><f t="shared" si="0"/><v>20</v></c></row>` +
+    `<row r="3"><c r="A3"><v>6</v></c><c r="B3"><v>7</v></c>` +
+    `<c r="C3"><f t="shared" si="0"/><v>42</v></c></row>` +
+    // An array formula: declared on its master cell only.
+    `<row r="4"><c r="D4"><f t="array" ref="D4:D5">A1:A2*2</f><v>4</v></c></row>` +
+    `<row r="5"><c r="D5"><v>8</v></c></row>` +
+    // A styled cell with no value, self-closing; a bare declared cell; a date.
+    `<row r="6"><c r="E6" s="1"/><c r="F6"/><c r="G6" s="2"><v>45376.5</v></c></row>` +
+    // Cells that do not say where they sit.
+    `<row r="7"><c><v>1</v></c><c s="1"/><c><v>3</v></c></row>` +
+    SHEET_CLOSE;
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(1, { sharedStrings: false }),
+  );
+  await zip.add("xl/styles.xml", STYLES);
+  await zip.add("xl/worksheets/sheet1.xml", sheet);
+  zip.close();
+}
+
+/// Everything a workbook declares about itself: properties, defined names, the
+/// 1904 date system, a VBA project, pivot and drawing parts, an external link,
+/// and a styles table with custom formats, fonts, pattern and gradient fills.
+async function buildWorkbookAnatomy() {
+  const zip = new ZipWriter(path.join(OUT_DIR, "workbook-anatomy.xlsx"));
+  const R =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(2, { sharedStrings: false }),
+  );
+  await zip.add(
+    "_rels/.rels",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="${R}/officeDocument" Target="xl/workbook.xml"/>` +
+      `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>` +
+      `<Relationship Id="rId3" Type="${R}/extended-properties" Target="docProps/app.xml"/>` +
+      `</Relationships>`,
+  );
+  await zip.add(
+    "docProps/core.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ` +
+      `xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" ` +
+      `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+      `<dc:creator>Ada &amp; Grace</dc:creator><cp:lastModifiedBy>Alan</cp:lastModifiedBy>` +
+      `<dcterms:created xsi:type="dcterms:W3CDTF">2024-03-25T09:30:00Z</dcterms:created>` +
+      `<dcterms:modified xsi:type="dcterms:W3CDTF">2024-04-01T17:00:00Z</dcterms:modified>` +
+      `<dc:title>Planning</dc:title><cp:keywords>budget, 2024</cp:keywords>` +
+      `</cp:coreProperties>`,
+  );
+  await zip.add(
+    "docProps/app.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">` +
+      `<Application>Microsoft Excel</Application><AppVersion>16.0300</AppVersion><Company>Contoso</Company>` +
+      `</Properties>`,
+  );
+  await zip.add(
+    "xl/workbook.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${R}">` +
+      `<workbookPr date1904="1"/>` +
+      `<sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Lists" sheetId="2" state="hidden" r:id="rId2"/></sheets>` +
+      `<definedNames>` +
+      `<definedName name="Statuses">Lists!$A$1:$A$3</definedName>` +
+      `<definedName name="Local" localSheetId="0" hidden="1" comment="scoped">Data!$B$2</definedName>` +
+      `<definedName name="Broken">#REF!$A$1</definedName>` +
+      `</definedNames>` +
+      `</workbook>`,
+  );
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="${R}/worksheet" Target="worksheets/sheet1.xml"/>` +
+      `<Relationship Id="rId2" Type="${R}/worksheet" Target="/xl/worksheets/sheet2.xml"/>` +
+      `<Relationship Id="rId3" Type="${R}/styles" Target="styles.xml"/>` +
+      `<Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>` +
+      `<Relationship Id="rId5" Type="${R}/externalLink" Target="externalLinks/externalLink1.xml"/>` +
+      `</Relationships>`,
+  );
+  await zip.add(
+    "xl/styles.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+      `<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00 &quot;€&quot;"/></numFmts>` +
+      `<fonts count="2">` +
+      `<font><sz val="11"/><name val="Calibri"/></font>` +
+      `<font><b/><i val="0"/><u val="double"/><vertAlign val="superscript"/><sz val="14"/>` +
+      `<color theme="1" tint="-0.25"/><name val="Arial"/></font>` +
+      `</fonts>` +
+      `<fills count="3">` +
+      `<fill><patternFill patternType="none"/></fill>` +
+      `<fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill>` +
+      `<fill><gradientFill degree="90"><stop position="0"><color rgb="FF0000FF"/></stop>` +
+      `<stop position="1"><color theme="4"/></stop></gradientFill></fill>` +
+      `</fills>` +
+      `<borders count="1"><border/></borders>` +
+      `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+      `<cellXfs count="5">` +
+      `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+      `<xf numFmtId="164" fontId="1" fillId="1" borderId="0" xfId="0" applyNumberFormat="1">` +
+      `<alignment horizontal="center" vertical="top" wrapText="1" indent="2" textRotation="45"/></xf>` +
+      `<xf numFmtId="14" fontId="0" fillId="2" borderId="0" xfId="0"/>` +
+      `<xf numFmtId="27" fontId="0" fillId="0" borderId="0" xfId="0"><alignment horizontal="sideways"/></xf>` +
+      // Refers to a third font, which the table does not have: it resolves to
+      // the default font, unless the dxf's bold font leaked into the table.
+      `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0"/>` +
+      `</cellXfs>` +
+      // A differential format's font must not land in the font table.
+      `<dxfs count="1"><dxf><font><b/></font></dxf></dxfs>` +
+      `</styleSheet>`,
+  );
+  await zip.add("xl/vbaProject.bin", "not really a VBA project");
+  await zip.add(
+    "xl/externalLinks/externalLink1.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>`,
+  );
+  await zip.add(
+    "xl/pivotCache/pivotCacheDefinition1.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>`,
+  );
+  await zip.add(
+    "xl/drawings/drawing1.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>`,
+  );
+  await zip.add("xl/worksheets/sheet1.xml", smallSheet(0, 3));
+  await zip.add("xl/worksheets/sheet2.xml", smallSheet(1, 3));
+  zip.close();
+}
+
+const R_NS =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/// A one-sheet workbook whose sheet part and sheet relationships are given,
+/// plus any other parts, for the sheet inspection.
+async function buildInspectedSheet(name, { sheet, rels, parts = {} }) {
+  const zip = new ZipWriter(path.join(OUT_DIR, `${name}.xlsx`));
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(1, { sharedStrings: false }),
+  );
+  await zip.add("xl/styles.xml", STYLES);
+  await zip.add("xl/worksheets/sheet1.xml", sheet);
+  if (rels !== undefined) {
+    await zip.add(
+      "xl/worksheets/_rels/sheet1.xml.rels",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`,
+    );
+  }
+  for (const [part, content] of Object.entries(parts)) {
+    await zip.add(part, content);
+  }
+  zip.close();
+}
+
+const WORKSHEET_OPEN =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ` +
+  `xmlns:r="${R_NS}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" ` +
+  `xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">`;
+
+/// Everything a sheet declares besides its cells, in the order of the schema.
+const buildSheetAnatomy = () =>
+  buildInspectedSheet("sheet-anatomy", {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetPr><tabColor rgb="FFFF0000"/></sheetPr>` +
+      `<dimension ref="A1:F6"/>` +
+      `<sheetViews><sheetView workbookViewId="0">` +
+      `<pane xSplit="1" ySplit="2" topLeftCell="B3" activePane="bottomRight" state="frozen"/>` +
+      `</sheetView></sheetViews>` +
+      `<cols><col min="2" max="2" width="0" hidden="1"/><col min="4" max="6" width="18.5" outlineLevel="1"/></cols>` +
+      `<sheetData>` +
+      `<row r="1"><c r="A1"><v>1</v></c></row>` +
+      `<row r="3" hidden="1"><c r="A3"><v>3</v></c></row>` +
+      `<row hidden="1"><c r="A4"><v>4</v></c></row>` +
+      `<row r="6"><c r="A6"><v>6</v></c></row>` +
+      `</sheetData>` +
+      `<sheetProtection password="CC1A" sheet="1" formatCells="0" sort="0"/>` +
+      `<autoFilter ref="A1:C6"/>` +
+      `<mergeCells count="2"><mergeCell ref="A1:B1"/><mergeCell ref="C2:C4"/></mergeCells>` +
+      `<conditionalFormatting sqref="A1:A6 C1:C6">` +
+      `<cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>10</formula></cfRule>` +
+      `<cfRule type="timePeriod" dxfId="1" priority="1" timePeriod="last7Days" stopIfTrue="1"><formula>FLOOR(A1,1)=TODAY()-1</formula></cfRule>` +
+      `<cfRule type="sparkles" priority="3"/>` +
+      `</conditionalFormatting>` +
+      `<conditionalFormatting sqref="B2:B6">` +
+      `<cfRule type="dataBar" priority="4"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar>` +
+      `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{00000000-0000-0000-0000-000000000001}</x14:id></ext></extLst>` +
+      `</cfRule></conditionalFormatting>` +
+      `<dataValidations count="1">` +
+      `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" ` +
+      `errorStyle="warning" errorTitle="Statut" error="Choisir dans la liste" sqref="B2:B6 D2">` +
+      `<formula1>"Ouvert,Fermé"</formula1></dataValidation>` +
+      `</dataValidations>` +
+      `<hyperlinks>` +
+      `<hyperlink ref="A1" r:id="rId1" tooltip="Le site" display="maleus-ai/xlsx"/>` +
+      `<hyperlink ref="A6" location="'Data'!A1"/>` +
+      `</hyperlinks>` +
+      `<drawing r:id="rId2"/>` +
+      `<tableParts count="1"><tablePart r:id="rId3"/></tableParts>` +
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>` +
+      // Extends the standard data bar above: not restored twice.
+      `<x14:conditionalFormatting><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}">` +
+      `<x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar>` +
+      `</x14:cfRule><xm:sqref>B2:B6</xm:sqref></x14:conditionalFormatting>` +
+      `<x14:conditionalFormatting>` +
+      `<x14:cfRule type="expression" priority="5" id="{00000000-0000-0000-0000-000000000002}">` +
+      `<xm:f>Lists!$A$1="Ouvert"</xm:f><x14:dxf><font><b/></font></x14:dxf></x14:cfRule>` +
+      `<x14:cfRule type="iconSet" priority="6" id="{00000000-0000-0000-0000-000000000003}">` +
+      `<x14:iconSet iconSet="3Triangles" custom="1">` +
+      `<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo>` +
+      `<x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo><x14:cfIcon iconSet="3Arrows" iconId="0"/>` +
+      `</x14:iconSet></x14:cfRule>` +
+      `<xm:sqref>F2:F6 F8</xm:sqref></x14:conditionalFormatting>` +
+      `</x14:conditionalFormattings></ext>` +
+      `<ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}">` +
+      `<x14:dataValidations count="1"><x14:dataValidation type="list" allowBlank="1">` +
+      `<x14:formula1><xm:f>Lists!$A$1:$A$3</xm:f></x14:formula1><xm:sqref>E2:E6</xm:sqref>` +
+      `</x14:dataValidation></x14:dataValidations>` +
+      `</ext></extLst>` +
+      `</worksheet>`,
+    rels:
+      `<Relationship Id="rId1" Type="${R_NS}/hyperlink" Target="https://github.com/maleus-ai/xlsx" TargetMode="External"/>` +
+      `<Relationship Id="rId2" Type="${R_NS}/drawing" Target="../drawings/drawing1.xml"/>` +
+      `<Relationship Id="rId3" Type="${R_NS}/table" Target="../tables/table1.xml"/>` +
+      `<Relationship Id="rId4" Type="${R_NS}/comments" Target="../comments1.xml"/>`,
+    parts: {
+      "xl/tables/table1.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Suivi" ` +
+        `displayName="Suivi_2024" ref="A1:C6" totalsRowCount="1">` +
+        `<autoFilter ref="A1:C5"/>` +
+        `<tableColumns count="3">` +
+        `<tableColumn id="1" name="Client" totalsRowLabel="Total"/>` +
+        `<tableColumn id="2" name="Montant" totalsRowFunction="sum"/>` +
+        `<tableColumn id="3" name="TTC"><calculatedColumnFormula>Suivi_2024[[#This Row],[Montant]]*1.2</calculatedColumnFormula></tableColumn>` +
+        `</tableColumns></table>`,
+      "xl/drawings/drawing1.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">` +
+        `<xdr:twoCellAnchor><xdr:pic/></xdr:twoCellAnchor>` +
+        `<xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor>` +
+        `<xdr:oneCellAnchor><xdr:pic/></xdr:oneCellAnchor>` +
+        `</xdr:wsDr>`,
+      "xl/comments1.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+        `<authors><author>Ada</author><author>Grace</author></authors>` +
+        `<commentList>` +
+        `<comment ref="B2" authorId="1"><text><r><rPr><b/></rPr><t>Grace:</t></r><r><t xml:space="preserve"> à vérifier</t></r></text></comment>` +
+        `<comment ref="A6" authorId="0"><text><t>Simple</t><rPh sb="0" eb="1"><t>ignored</t></rPh></text></comment>` +
+        `<comment ref="C3" authorId="7"><text><t>Orphan</t></text></comment>` +
+        `</commentList></comments>`,
+    },
+  });
+
+/// A table part the sheet's relationships name and the archive does not hold.
+const buildSheetMissingPart = () =>
+  buildInspectedSheet("sheet-missing-part", {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetData/><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>`,
+    rels: `<Relationship Id="rId1" Type="${R_NS}/table" Target="../tables/table9.xml"/>`,
+  });
+
+/// A relationship that climbs out of the package.
+const buildSheetEscapingRelationship = () =>
+  buildInspectedSheet("sheet-escaping-relationship", {
+    sheet: WORKSHEET_OPEN + `<sheetData/><drawing r:id="rId1"/></worksheet>`,
+    rels: `<Relationship Id="rId1" Type="${R_NS}/drawing" Target="../../../../etc/passwd"/>`,
+  });
+
+/// A comments part that inflates far past a small budget, behind one cell.
+const buildBombComments = () =>
+  buildInspectedSheet("bomb-comments", {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>`,
+    rels: `<Relationship Id="rId1" Type="${R_NS}/comments" Target="../comments1.xml"/>`,
+    parts: {
+      "xl/comments1.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+        `<authors><author>a</author></authors><commentList>` +
+        `<comment ref="A1" authorId="0"><text><t>${"x".repeat(32 * 1024 * 1024)}</t></text></comment>` +
+        `</commentList></comments>`,
+    },
+  });
+
+/// Amplification through the comments, within the byte budget: one author
+/// named with 4 MiB, and 20 000 empty comments of a few bytes, all of them
+/// referring to it. A reader that copied the name into every comment would
+/// hand out 80 GiB of author names.
+const buildBombCommentAuthors = () =>
+  buildInspectedSheet("bomb-comment-authors", {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>`,
+    rels: `<Relationship Id="rId1" Type="${R_NS}/comments" Target="../comments1.xml"/>`,
+    parts: {
+      "xl/comments1.xml": repeat(
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+          `<authors><author>${"A".repeat(4 * 1024 * 1024)}</author></authors><commentList>`,
+        () => `<comment ref="A1" authorId="0"/>`,
+        20_000,
+        `</commentList></comments>`,
+      ),
+    },
+  });
+
+/// Amplification through the hyperlinks: one relationship whose target is
+/// 4 MiB, and 1 000 hyperlinks of a few bytes naming it. Each link receives
+/// its own copy of the target, 4 GiB in all.
+const buildBombHyperlinkTargets = () =>
+  buildInspectedSheet("bomb-hyperlink-targets", {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>` +
+      `<hyperlinks>${'<hyperlink ref="A1" r:id="rId1"/>'.repeat(1_000)}</hyperlinks>` +
+      `</worksheet>`,
+    rels: `<Relationship Id="rId1" Type="${R_NS}/hyperlink" Target="https://${"a".repeat(4 * 1024 * 1024)}" TargetMode="External"/>`,
+  });
+
+/// Amplification through the records a sheet part builds, within the byte
+/// budget: 100 000 empty validations of 17 bytes, each a record of a few
+/// hundred, then one validation over 2.5 million ranges of one letter, each
+/// a string several times the two bytes it is read from. About 7 MB of XML
+/// build records past 80 MB.
+const buildBombSheetRecords = () =>
+  buildInspectedSheet("bomb-sheet-records", {
+    sheet: repeat(
+      WORKSHEET_OPEN +
+        `<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>` +
+        `<dataValidations>`,
+      () => `<dataValidation/>`,
+      100_000,
+      `<dataValidation sqref="${"A ".repeat(2_500_000)}"/></dataValidations></worksheet>`,
+    ),
+  });
+
+/// A sheet part inflating past a small budget through ordinary cells alone,
+/// which the inspection skips: no record is built, only the stream is charged.
+const buildBombSheetCells = () =>
+  buildInspectedSheet("bomb-sheet-cells", {
+    sheet: repeat(
+      WORKSHEET_OPEN + `<sheetData>`,
+      (i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>1</v></c></row>`,
+      300_000,
+      `</sheetData></worksheet>`,
+    ),
+  });
+
+/// Sheet metadata alone — merged ranges, then validations — inflating past a
+/// small budget, on a sheet of one cell.
+const buildBombSheetMetadata = (name, element) => () =>
+  buildInspectedSheet(name, {
+    sheet:
+      WORKSHEET_OPEN +
+      `<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>` +
+      element +
+      `</worksheet>`,
+  });
+
+/// A workbook with no styles part, no properties, no defined names.
+async function buildBareWorkbook() {
+  const zip = new ZipWriter(path.join(OUT_DIR, "bare-workbook.xlsx"));
+  const R =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="${R}/worksheet" Target="worksheets/sheet1.xml"/>` +
+      `</Relationships>`,
+  );
+  await zip.add("xl/worksheets/sheet1.xml", ONE_ROW_SHEET);
+  zip.close();
+}
+
 // ---------------------------------------------------------------------------
 // Hostile archives. Each carries a single row of data: what blows up is the
 // phase the reader runs *before* handing back its first row.
@@ -359,6 +860,39 @@ async function buildBombStyles() {
         `<cellXfs count="${count}">`,
       () =>
         `<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>`,
+      count,
+      `</cellXfs></styleSheet>`,
+    ),
+  );
+  await zip.add("xl/worksheets/sheet1.xml", ONE_ROW_SHEET);
+  zip.close();
+}
+
+/// Amplification through the styles, within the byte budget: one font named
+/// with 4 MiB, and 100 000 cell formats of a few bytes, all of them referring
+/// to it. A reader that copied the font into every style would hand out
+/// 400 GiB of font names.
+async function buildBombStylesShared() {
+  const count = 100_000;
+  const zip = new ZipWriter(path.join(OUT_DIR, "bomb-styles-shared.xlsx"));
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(1, { sharedStrings: false }),
+  );
+  await zip.add(
+    "xl/styles.xml",
+    repeat(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+        `<fonts count="1"><font><name val="${"F".repeat(4 * 1024 * 1024)}"/></font></fonts>` +
+        `<cellXfs count="${count}">`,
+      () => `<xf/>`,
       count,
       `</cellXfs></styleSheet>`,
     ),
@@ -558,6 +1092,77 @@ async function buildBombWideRows() {
   await buildWideSheet("bomb-wide-rows", "XFD", 1_000);
 }
 
+/// Amplification through a shared formula index. A reader that keeps shared
+/// formulas in a table indexed by `si` sizes it by the largest index it meets,
+/// so a sixty-byte cell declaring `si="1000000000000"` asks for terabytes. The
+/// derived cell after it refers to the same index.
+async function buildBombSharedFormula() {
+  const sheet =
+    SHEET_OPEN +
+    `<row r="1"><c r="A1"><v>2</v></c>` +
+    `<c r="B1"><f t="shared" ref="B1:B2" si="1000000000000">A1*2</f><v>4</v></c></row>` +
+    `<row r="2"><c r="A2"><v>3</v></c>` +
+    `<c r="B2"><f t="shared" si="1000000000000"/><v>6</v></c></row>` +
+    SHEET_CLOSE;
+
+  const zip = new ZipWriter(path.join(OUT_DIR, "bomb-shared-formula.xlsx"));
+  await zip.add(
+    "[Content_Types].xml",
+    CONTENT_TYPES(1, { sharedStrings: false }),
+  );
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add(
+    "xl/_rels/workbook.xml.rels",
+    workbookRels(1, { sharedStrings: false }),
+  );
+  await zip.add("xl/styles.xml", STYLES);
+  await zip.add("xl/worksheets/sheet1.xml", sheet);
+  zip.close();
+}
+
+/// Amplification through copies. A 64 KiB shared formula written once, then
+/// reused by 4 000 cells: each derived cell is thirty bytes of XML and gets the
+/// whole template expanded for its position — 256 MiB of formula text out of an
+/// archive that inflates to a few hundred kilobytes.
+async function buildBombSharedFormulaText() {
+  const template = "A1+".repeat((64 * 1024) / 3) + "A1";
+  let sheet =
+    SHEET_OPEN +
+    `<row r="1"><c r="A1"><v>1</v></c>` +
+    `<c r="B1"><f t="shared" ref="B1:B4000" si="0">${template}</f><v>0</v></c></row>`;
+  for (let r = 2; r <= 4_000; r += 1) {
+    sheet += `<row r="${r}"><c r="B${r}"><f t="shared" si="0"/><v>0</v></c></row>`;
+  }
+  sheet += SHEET_CLOSE;
+  await buildCopiesSheet("bomb-shared-formula-text", sheet, []);
+}
+
+/// The same amplification through the shared string table: one 64 KiB string,
+/// referred to by 4 000 cells.
+async function buildBombSharedStringCopies() {
+  let sheet = SHEET_OPEN;
+  for (let r = 1; r <= 4_000; r += 1) {
+    sheet += `<row r="${r}"><c r="A${r}" t="s"><v>0</v></c></row>`;
+  }
+  sheet += SHEET_CLOSE;
+  await buildCopiesSheet("bomb-shared-string-copies", sheet, [
+    "x".repeat(64 * 1024),
+  ]);
+}
+
+async function buildCopiesSheet(name, sheet, strings) {
+  const zip = new ZipWriter(path.join(OUT_DIR, `${name}.xlsx`));
+  await zip.add("[Content_Types].xml", CONTENT_TYPES(1));
+  await zip.add("_rels/.rels", ROOT_RELS);
+  await zip.add("xl/workbook.xml", workbook(["Data"]));
+  await zip.add("xl/_rels/workbook.xml.rels", workbookRels(1));
+  await zip.add("xl/styles.xml", STYLES);
+  await zip.add("xl/sharedStrings.xml", sharedStrings(strings));
+  await zip.add("xl/worksheets/sheet1.xml", sheet);
+  zip.close();
+}
+
 async function buildWideSheet(name, lastColumn, rowCount) {
   let sheet = SHEET_OPEN;
   for (let r = 1; r <= rowCount; r += 1) {
@@ -654,8 +1259,32 @@ const FIXTURES = {
   "sparse-nodim": () => buildSparse({ declareDimension: false }),
   "dates-1904": buildDates1904,
   "hidden-sheets": buildHiddenSheets,
+  "sheet-ids": buildSheetIds,
+  "unknown-sheet-state": buildUnknownSheetState,
+  "starts-lower": buildStartsLower,
+  "backslash-entries": buildBackslashEntries,
+  formulas: buildFormulas,
+  "workbook-anatomy": buildWorkbookAnatomy,
+  "bare-workbook": buildBareWorkbook,
+  "sheet-anatomy": buildSheetAnatomy,
+  "sheet-missing-part": buildSheetMissingPart,
+  "sheet-escaping-relationship": buildSheetEscapingRelationship,
+  "bomb-comments": buildBombComments,
+  "bomb-comment-authors": buildBombCommentAuthors,
+  "bomb-hyperlink-targets": buildBombHyperlinkTargets,
+  "bomb-sheet-records": buildBombSheetRecords,
+  "bomb-sheet-cells": buildBombSheetCells,
+  "bomb-merges": buildBombSheetMetadata(
+    "bomb-merges",
+    `<mergeCells>${'<mergeCell ref="A1:B2"/>'.repeat(600_000)}</mergeCells>`,
+  ),
+  "bomb-validations": buildBombSheetMetadata(
+    "bomb-validations",
+    `<dataValidations>${'<dataValidation type="whole" sqref="A1"><formula1>1</formula1></dataValidation>'.repeat(200_000)}</dataValidations>`,
+  ),
   "bomb-sharedstrings": buildBombSharedStrings,
   "bomb-styles": buildBombStyles,
+  "bomb-styles-shared": buildBombStylesShared,
   "bomb-rels": buildBombRels,
   "bomb-package-rels": buildBombPackageRels,
   "bomb-workbook": buildBombWorkbook,
@@ -663,6 +1292,9 @@ const FIXTURES = {
   "bomb-entries": buildBombEntries,
   "bomb-column-ref": buildBombColumnRef,
   "bomb-wide-rows": buildBombWideRows,
+  "bomb-shared-formula": buildBombSharedFormula,
+  "bomb-shared-formula-text": buildBombSharedFormulaText,
+  "bomb-shared-string-copies": buildBombSharedStringCopies,
   "xxe-billion-laughs": buildXxeBillionLaughs,
   "xxe-external-entity": buildXxeExternalEntity,
   "lying-sizes": buildLyingSizes,

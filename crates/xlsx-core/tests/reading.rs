@@ -3,7 +3,7 @@
 mod common;
 
 use common::fixture;
-use xlsx_core::{CellValue, ReadError, ReaderOptions, XlsxReader};
+use xlsx_core::{CellValue, ReadError, ReaderOptions, Row, SheetState, XlsxReader};
 
 /// Generous bounds: these tests are about reading, not about refusing.
 fn permissive() -> ReaderOptions {
@@ -13,7 +13,7 @@ fn permissive() -> ReaderOptions {
     }
 }
 
-fn read_all(reader: &mut XlsxReader) -> Vec<Vec<CellValue>> {
+fn read_rows(reader: &mut XlsxReader) -> Vec<Row> {
     let mut rows = Vec::new();
     while let Some(batch) = reader.next_batch(128).expect("batch") {
         rows.extend(batch);
@@ -21,29 +21,59 @@ fn read_all(reader: &mut XlsxReader) -> Vec<Vec<CellValue>> {
     rows
 }
 
+fn read_all(reader: &mut XlsxReader) -> Vec<Vec<CellValue>> {
+    read_rows(reader)
+        .into_iter()
+        .map(|row| row.values)
+        .collect()
+}
+
 #[test]
-fn lists_sheets_with_their_visibility() {
+fn restores_visible_hidden_and_very_hidden_as_the_workbook_declares_them() {
     let reader = XlsxReader::open(&fixture("hidden-sheets"), permissive()).expect("open");
 
-    let sheets: Vec<(&str, bool)> = reader
+    let sheets: Vec<(&str, SheetState)> = reader
         .sheets()
         .iter()
-        .map(|s| (s.name.as_str(), s.visible))
+        .map(|s| (s.name.as_str(), s.state))
         .collect();
 
     assert_eq!(
         sheets,
         vec![
-            ("Data", true),
-            ("Paramètres", false),
-            ("Notes", false), // veryHidden is hidden too
+            ("Data", SheetState::Visible),
+            ("Paramètres", SheetState::Hidden),
+            ("Notes", SheetState::VeryHidden),
         ]
     );
 }
 
 #[test]
-fn listing_sheets_agrees_with_opening_the_workbook() {
-    // Listing reads two small parts; opening walks the whole archive. Two paths
+fn restores_the_declared_sheet_id_not_the_position_of_the_tab() {
+    let sheets = XlsxReader::peek_sheets(&fixture("sheet-ids"), 1 << 20).expect("peek");
+
+    let ids: Vec<(&str, u32)> = sheets
+        .iter()
+        .map(|s| (s.name.as_str(), s.sheet_id))
+        .collect();
+
+    assert_eq!(ids, vec![("Synthèse", 7), ("Données", 3)]);
+}
+
+#[test]
+fn refuses_a_workbook_whose_sheet_declares_a_state_outside_the_format() {
+    let peeked =
+        XlsxReader::peek_sheets(&fixture("unknown-sheet-state"), 1 << 20).expect_err("must refuse");
+    assert_eq!(peeked.code(), "CORRUPT");
+
+    let opened =
+        XlsxReader::open(&fixture("unknown-sheet-state"), permissive()).expect_err("must refuse");
+    assert_eq!(opened.code(), "CORRUPT");
+}
+
+#[test]
+fn peeking_at_sheets_agrees_with_opening_the_workbook() {
+    // A peek reads two small parts; opening walks the whole archive. Two paths
     // through the same format is two chances to disagree about what a sheet is,
     // so they are held to the same answer on every workbook in the repository.
     for name in [
@@ -52,6 +82,10 @@ fn listing_sheets_agrees_with_opening_the_workbook() {
         "sheets-8",
         "sheets-16",
         "hidden-sheets",
+        "sheet-ids",
+        // `\` separators and a case that differs from the declared targets:
+        // `calamine` resolves those, so a peek must too.
+        "backslash-entries",
         "types",
         "sparse",
         "dates-1904",
@@ -60,33 +94,33 @@ fn listing_sheets_agrees_with_opening_the_workbook() {
         let path = fixture(name);
 
         let opened = XlsxReader::open(&path, permissive()).expect("open");
-        let listed =
-            XlsxReader::list_sheets(&path, permissive().max_decompressed_bytes).expect("list");
+        let peeked =
+            XlsxReader::peek_sheets(&path, permissive().max_decompressed_bytes).expect("peek");
 
-        assert_eq!(listed, opened.sheets(), "{name}");
+        assert_eq!(peeked, opened.sheets(), "{name}");
     }
 }
 
 #[test]
-fn listing_sheets_is_bounded_like_everything_else() {
+fn peeking_at_sheets_is_bounded_like_everything_else() {
     for name in ["bomb-workbook", "bomb-package-rels"] {
         let error =
-            XlsxReader::list_sheets(&fixture(name), 8 * 1024 * 1024).expect_err("must refuse");
+            XlsxReader::peek_sheets(&fixture(name), 8 * 1024 * 1024).expect_err("must refuse");
         assert_eq!(error.code(), "DECOMPRESSED_BUDGET_EXCEEDED", "{name}");
     }
 
-    let error = XlsxReader::list_sheets(&fixture("bomb-entries"), 8 * 1024 * 1024)
+    let error = XlsxReader::peek_sheets(&fixture("bomb-entries"), 8 * 1024 * 1024)
         .expect_err("must refuse");
     assert_eq!(error.code(), "TOO_MANY_ENTRIES");
 
     let error =
-        XlsxReader::list_sheets(&fixture("not-an-archive"), 1 << 20).expect_err("must refuse");
+        XlsxReader::peek_sheets(&fixture("not-an-archive"), 1 << 20).expect_err("must refuse");
     assert_eq!(error.code(), "NOT_AN_ARCHIVE");
 }
 
 #[test]
-fn listing_sheets_does_not_read_the_sheets() {
-    // The point of the separate path, stated as a duration: a listing must not
+fn peeking_at_sheets_does_not_read_the_sheets() {
+    // The point of the separate path, stated as a duration: a peek must not
     // cost a walk of the archive. Opening the same workbook inflates 204 MB.
     let path = fixture("large-600000");
 
@@ -94,13 +128,52 @@ fn listing_sheets_does_not_read_the_sheets() {
     let _ = std::fs::read(&path);
 
     let started = std::time::Instant::now();
-    let sheets = XlsxReader::list_sheets(&path, 1 << 30).expect("list");
+    let sheets = XlsxReader::peek_sheets(&path, 1 << 30).expect("peek");
     let elapsed = started.elapsed();
 
     assert_eq!(sheets.len(), 1);
     assert!(
         elapsed < std::time::Duration::from_millis(50),
-        "listing took {elapsed:?}, which means it read the sheets"
+        "peeking took {elapsed:?}, which means it read the sheets"
+    );
+}
+
+#[test]
+fn numbers_each_row_by_its_position_in_the_sheet_gaps_included() {
+    let mut reader = XlsxReader::open(&fixture("sparse"), permissive()).expect("open");
+
+    let positions: Vec<u32> = read_rows(&mut reader).iter().map(|row| row.row).collect();
+
+    // Row 4 of the sheet is absent: the fourth row emitted is row 5, index 4.
+    assert_eq!(positions, vec![0, 1, 2, 4]);
+}
+
+#[test]
+fn numbers_the_first_row_emitted_at_its_real_position_when_the_sheet_starts_lower() {
+    let mut reader = XlsxReader::open(&fixture("starts-lower"), permissive()).expect("open");
+
+    let rows = read_rows(&mut reader);
+
+    assert_eq!(
+        rows.iter().map(|row| row.row).collect::<Vec<_>>(),
+        vec![2, 4]
+    );
+}
+
+#[test]
+fn keeps_column_a_at_index_zero_when_the_first_columns_are_empty() {
+    let mut reader = XlsxReader::open(&fixture("starts-lower"), permissive()).expect("open");
+
+    let rows = read_all(&mut reader);
+
+    assert_eq!(
+        rows[0],
+        vec![
+            CellValue::Empty,
+            CellValue::Empty,
+            CellValue::Number(1.0),
+            CellValue::Number(2.0),
+        ]
     );
 }
 

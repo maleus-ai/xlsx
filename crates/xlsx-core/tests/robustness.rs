@@ -42,7 +42,7 @@ fn every_tab_of_every_workbook_reads_through_twenty_times_over() {
                 let mut last: Option<Vec<CellValue>> = None;
                 while let Some(batch) = reader.next_batch(16).expect("batch") {
                     rows += batch.len();
-                    last = batch.last().cloned();
+                    last = batch.last().map(|row| row.values.clone());
                 }
 
                 assert_eq!(rows, 31, "{tabs} tabs, run {run}, sheet {name}");

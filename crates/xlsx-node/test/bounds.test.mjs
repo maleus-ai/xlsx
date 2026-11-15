@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { XlsxError, listSheets, xlsxRows } from "../lib/index.js";
+import { XlsxError, peekSheets, readCells, readRows } from "../lib/index.js";
 import { PERMISSIVE, collect, fixture } from "./helpers.mjs";
 
 const EIGHT_MIB = 8 * 1024 * 1024;
@@ -36,7 +36,7 @@ test("every hostile archive is refused at the part that blows up", async () => {
   for (const [name, part, code] of cases) {
     const error = await refusal(
       collect(
-        xlsxRows(fixture(name), {
+        readRows(fixture(name), {
           maxDecompressedBytes: EIGHT_MIB,
           maxRows: 1_000_000,
         }),
@@ -55,7 +55,7 @@ test("an archive of countless tiny entries is refused before it is opened", asyn
   // budget applies.
   const error = await refusal(
     collect(
-      xlsxRows(fixture("bomb-entries"), {
+      readRows(fixture("bomb-entries"), {
         maxDecompressedBytes: EIGHT_MIB,
         maxRows: 1_000,
       }),
@@ -75,7 +75,7 @@ test("listing sheets is bounded on what listing reads", async () => {
     ["not-an-archive", "NOT_AN_ARCHIVE"],
   ]) {
     const error = await refusal(
-      listSheets(fixture(name), { maxDecompressedBytes: EIGHT_MIB }),
+      peekSheets(fixture(name), { maxDecompressedBytes: EIGHT_MIB }),
     );
     assert.equal(error.code, code, name);
   }
@@ -84,15 +84,19 @@ test("listing sheets is bounded on what listing reads", async () => {
   // shared strings nor the workbook's own relationships are read to answer what
   // the tabs are called.
   for (const name of ["bomb-sharedstrings", "bomb-rels", "bomb-styles"]) {
-    const sheets = await listSheets(fixture(name), {
+    const sheets = await peekSheets(fixture(name), {
       maxDecompressedBytes: EIGHT_MIB,
     });
-    assert.deepEqual(sheets, [{ name: "Data", visible: true }], name);
+    assert.deepEqual(
+      sheets,
+      [{ name: "Data", sheetId: 1, state: "visible" }],
+      name,
+    );
 
     // Reading them, on the other hand, is refused exactly as before.
     const error = await refusal(
       collect(
-        xlsxRows(fixture(name), {
+        readRows(fixture(name), {
           maxDecompressedBytes: EIGHT_MIB,
           maxRows: 1_000,
         }),
@@ -106,13 +110,13 @@ test("listing sheets does not cost a walk of the archive", async () => {
   const file = fixture("large-600000");
 
   // Warm the page cache: what is being timed is inflating, not reading a disk.
-  await listSheets(file, { maxDecompressedBytes: 1 << 30 });
+  await peekSheets(file, { maxDecompressedBytes: 1 << 30 });
 
   const started = performance.now();
-  const sheets = await listSheets(file, { maxDecompressedBytes: 1 << 30 });
+  const sheets = await peekSheets(file, { maxDecompressedBytes: 1 << 30 });
   const elapsed = performance.now() - started;
 
-  assert.deepEqual(sheets, [{ name: "Data", visible: true }]);
+  assert.deepEqual(sheets, [{ name: "Data", sheetId: 1, state: "visible" }]);
   // Opening this workbook inflates 204 MB, which takes the better part of a
   // second. Listing reads two parts of a few kilobytes.
   assert.ok(elapsed < 50, `listing took ${elapsed.toFixed(1)} ms`);
@@ -121,7 +125,7 @@ test("listing sheets does not cost a walk of the archive", async () => {
 test("the row budget cuts on the row that crosses it", async () => {
   // sheets-2 holds exactly 31 rows: one header plus thirty.
   const withinBudget = await collect(
-    xlsxRows(fixture("sheets-2"), {
+    readRows(fixture("sheets-2"), {
       maxDecompressedBytes: EIGHT_MIB,
       maxRows: 31,
     }),
@@ -130,7 +134,7 @@ test("the row budget cuts on the row that crosses it", async () => {
 
   const error = await refusal(
     collect(
-      xlsxRows(fixture("sheets-2"), {
+      readRows(fixture("sheets-2"), {
         maxDecompressedBytes: EIGHT_MIB,
         maxRows: 30,
       }),
@@ -140,7 +144,7 @@ test("the row budget cuts on the row that crosses it", async () => {
 });
 
 test("the row budget does not wait for the end of a large sheet", async () => {
-  const stream = xlsxRows(fixture("large-200000"), {
+  const stream = readRows(fixture("large-200000"), {
     maxDecompressedBytes: 1 << 30,
     maxRows: 10,
     batchSize: 1_000,
@@ -158,7 +162,7 @@ test("the row budget does not wait for the end of a large sheet", async () => {
 
 test("a file that is not an archive is refused as such", async () => {
   const error = await refusal(
-    collect(xlsxRows(fixture("not-an-archive"), PERMISSIVE)),
+    collect(readRows(fixture("not-an-archive"), PERMISSIVE)),
   );
 
   assert.equal(error.code, "NOT_AN_ARCHIVE");
@@ -167,7 +171,7 @@ test("a file that is not an archive is refused as such", async () => {
 test("an unknown sheet names the alternatives", async () => {
   const error = await refusal(
     collect(
-      xlsxRows(fixture("sheets-2"), {
+      readRows(fixture("sheets-2"), {
         ...PERMISSIVE,
         sheet: "Feuille absente",
       }),
@@ -180,7 +184,7 @@ test("an unknown sheet names the alternatives", async () => {
 
 test("a missing file is not reported as a bad upload", async () => {
   const error = await refusal(
-    collect(xlsxRows("/tmp/il-n-y-a-rien-ici.xlsx", PERMISSIVE)),
+    collect(readRows("/tmp/il-n-y-a-rien-ici.xlsx", PERMISSIVE)),
   );
 
   assert.equal(error.code, "IO");
@@ -199,7 +203,7 @@ test("the budgets are mandatory", () => {
     { maxDecompressedBytes: Number.NaN, maxRows: 10 },
   ]) {
     assert.throws(
-      () => xlsxRows(file, options),
+      () => readRows(file, options),
       (error) => error instanceof XlsxError && error.code === "INVALID_OPTION",
       JSON.stringify(options ?? null),
     );
@@ -207,17 +211,42 @@ test("the budgets are mandatory", () => {
 
   // Explicit is fine: what is refused is the bound nobody set, not a large one.
   assert.doesNotThrow(() =>
-    xlsxRows(file, {
+    readRows(file, {
       maxDecompressedBytes: Number.MAX_SAFE_INTEGER,
       maxRows: Number.MAX_SAFE_INTEGER,
     }).destroy(),
   );
 });
 
+test("the cell budget is raised on the cell that crosses it, not at the end of the sheet", async () => {
+  let delivered = 0;
+  const error = await refusal(
+    (async () => {
+      for await (const _cell of readCells(fixture("large-200000"), {
+        maxDecompressedBytes: 1 << 30,
+        maxCells: 1_000,
+      })) {
+        delivered += 1;
+      }
+    })(),
+  );
+
+  assert.ok(error instanceof XlsxError);
+  assert.equal(error.code, "CELL_BUDGET_EXCEEDED");
+  assert.ok(delivered <= 1_000, `${delivered} cells handed over`);
+});
+
+test("the cell budget is required", () => {
+  assert.throws(
+    () => readCells(fixture("types"), { maxDecompressedBytes: 1 << 30 }),
+    (error) => error instanceof XlsxError && error.code === "INVALID_OPTION",
+  );
+});
+
 test("a nonsensical batch size is refused", () => {
   for (const batchSize of [0, -1, 1.5, "mille"]) {
     assert.throws(
-      () => xlsxRows(fixture("types"), { ...PERMISSIVE, batchSize }),
+      () => readRows(fixture("types"), { ...PERMISSIVE, batchSize }),
       (error) => error instanceof XlsxError && error.code === "INVALID_OPTION",
       String(batchSize),
     );

@@ -212,16 +212,27 @@ jobs:
       # version the registry had already staged.
       #
       # The platform packages go first: the root resolves them by name.
+      #
+      # A prerelease goes out under `next`. Without an explicit tag npm marks
+      # whatever it publishes `latest`, and every `npm install @maleus/xlsx`
+      # would then resolve the release candidate.
       - name: Publish
         working-directory: crates/xlsx-node
         run: |
+          version=$(node -p 'require("./package.json").version')
+          case "$version" in
+            *-*) tag=next ;;
+            *) tag=latest ;;
+          esac
+          echo "publishing $version under $tag"
           for dir in npm/*/; do
-            npm publish "$dir" --access public --ignore-scripts
+            npm publish "$dir" --access public --ignore-scripts --tag "$tag"
           done
-          npm publish --access public --ignore-scripts
+          npm publish --access public --ignore-scripts --tag "$tag"
 
       - name: GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.4.1
         with:
           files: crates/xlsx-node/artifacts/*.node
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -131,7 +131,7 @@ export function runInChild(body, env = {}) {
   const script = `
     import assert from "node:assert/strict";
     import fs from "node:fs";
-    import { listSheets, xlsxRows, xlsxWriteStream, XlsxError } from ${JSON.stringify(path.join(REPO_ROOT, "crates/xlsx-node/lib/index.js"))};
+    import { peekSheets, readRows, writeWorkbook, XlsxError } from ${JSON.stringify(path.join(REPO_ROOT, "crates/xlsx-node/lib/index.js"))};
 
     const peakRss = () => {
       const m = /^VmHWM:\\s+(\\d+) kB$/m.exec(fs.readFileSync("/proc/self/status", "utf8"));
@@ -148,12 +148,18 @@ export function runInChild(body, env = {}) {
   );
 }
 
-export async function collect(stream) {
+/** Every row of a stream, `{ row, values }` as the reader emits it. */
+export async function collectRows(stream) {
   const rows = [];
   for await (const row of stream) {
     rows.push(row);
   }
   return rows;
+}
+
+/** The values of every row of a stream, for tests about what the cells hold. */
+export async function collect(stream) {
+  return (await collectRows(stream)).map((row) => row.values);
 }
 
 /**

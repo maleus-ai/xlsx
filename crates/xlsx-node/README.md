@@ -12,18 +12,19 @@ This NPM package relies on Rust libraries, through a [napi-rs](https://napi.rs) 
 - [`rust_xlsxwriter`](https://github.com/jmcnamara/rust_xlsxwriter) for writing
 
 ```js
-import { xlsxRows, xlsxWriteStream } from "@maleus/xlsx";
+import { readRows, writeWorkbook } from "@maleus/xlsx";
 
-for await (const row of xlsxRows(upload.path, {
+for await (const { row, values } of readRows(upload.path, {
   maxDecompressedBytes: 512 * 1024 * 1024,
   maxRows: 1_000_000,
 })) {
-  // row: Array<string | number | boolean | null>
+  // row: 0-based position in the sheet
+  // values: Array<string | number | boolean | null>
 }
 
 await pipeline(
   Readable.from(records, { objectMode: true }),
-  xlsxWriteStream({
+  writeWorkbook({
     sheet: "Export",
     columns: [{ header: "Client" }, { header: "Signed", type: "date" }],
   }),
@@ -46,39 +47,63 @@ through an import.
 ## Reading
 
 ```ts
-function xlsxRows(path: string, options: XlsxRowsOptions): XlsxRows;
-function listSheets(path: string, options: BudgetOptions): Promise<SheetInfo[]>;
+function readRows(path: string, options: ReadRowsOptions): XlsxRows;
+function peekSheets(path: string, options: BudgetOptions): Promise<SheetInfo[]>;
 
-interface XlsxRowsOptions {
+interface ReadRowsOptions {
   sheet?: string; // defaults to the first sheet
   maxDecompressedBytes: number; // required, see below
   maxRows: number; // required, see below
   batchSize?: number; // defaults to 1000
 }
+
+interface SheetInfo {
+  name: string;
+  sheetId: number; // as the workbook declares it, unrelated to the tab order
+  state: "visible" | "hidden" | "veryHidden";
+}
 ```
 
-`xlsxRows` returns a `Readable` stream in object mode.
+`readRows` returns a `Readable` stream in object mode. `peekSheets` reads the
+workbook's sheet list and nothing else, so its cost does not depend on the size
+of the sheets; `readRows(...).sheets()` answers the same question off the open a
+read pays for anyway.
 
 Needs an existing file on the disk: XLSX files are compressed archives, and the
 central directory sits at the end of the archive, so a correct read needs to
 seek.
 
+### Positions
+
+A number is a 0-based position; a string is the A1 notation the file uses.
+Column A is `0`, the first row is `0`: show `row + 1` to a person. Two pure
+helpers go from one to the other:
+
+```js
+parseRef("B3:C10"); // { start: { row: 2, col: 1 }, end: { row: 9, col: 2 } }
+toA1({ row: 2, col: 1 }); // "B3"
+```
+
 ### Rows
 
-A row is `Array<string | number | boolean | null>`, each value at **its column
-index**. Holes stay holes; rows are padded to the widest row seen _so far_,
-which a streaming reader cannot know in advance:
+A row is `{ row, values }`. `row` is its 0-based position in the sheet, and
+`values` an `Array<string | number | boolean | null>`, each value at **its
+column index**. Rows the file does not carry are not emitted, so `row` can
+skip — it is what an import reports when a line is wrong. Holes stay holes;
+rows are padded to the widest row seen _so far_, which a streaming reader cannot
+know in advance:
 
 ```
       A     B     C     D
-  1   1                                  →  [1]
-  2   2     3     4     5                →  [2, 3, 4, 5]
+  1   1                                  →  { row: 0, values: [1] }
+  2   2     3     4     5                →  { row: 1, values: [2, 3, 4, 5] }
   3                                      →  (empty row, not materialised)
-  4   6                                  →  [6, null, null, null]
+  4   6                                  →  { row: 3, values: [6, null, null, null] }
 ```
 
 Real sheets settle their width on the header row, so this mostly concerns
-malformed input — but index by header position rather than by `row.length`.
+malformed input — but index by header position rather than by
+`values.length`.
 
 ### Values
 
@@ -97,11 +122,128 @@ XLSX carries no timezone, so the stored wall clock is reported verbatim with a
 `Z`, whatever `TZ` the process runs under. An elapsed time is a duration, not a
 point in time, and its hours do not wrap at 24.
 
+### Cells
+
+```ts
+function readCells(path: string, options: ReadCellsOptions): XlsxCells;
+
+interface ReadCellsOptions {
+  sheet?: string; // defaults to the first sheet
+  maxDecompressedBytes: number; // required
+  maxCells: number; // required
+  batchSize?: number; // defaults to 1000
+}
+
+interface Cell {
+  row: number; // 0-based
+  col: number; // 0-based
+  type:
+    | "string"
+    | "number"
+    | "boolean"
+    | "date"
+    | "duration"
+    | "error"
+    | "empty";
+  value: string | number | boolean | null;
+  formula?: {
+    text: string;
+    type: "normal" | "shared" | "array" | "dataTable";
+    ref?: string;
+  };
+  styleId: number; // index in the workbook's cell formats, 0 when none
+}
+```
+
+Where `readRows` serves an import, `readCells` serves an inspection: one
+object per cell the sheet declares, in document order — a cell that only
+carries a style included, as `type: "empty"`. `type` tells apart what the value
+alone confuses: a date, an error and a string all arrive as strings.
+
+A formula comes as written, without the `=`, alongside its cached result; it is
+never recalculated. A shared formula is expanded for every cell that uses it,
+and `ref` gives the range on the cell that declares it.
+
+The sheet is read twice — once for values and formulas, once for the style
+index and the formula attributes — and the second reading is charged against
+`maxDecompressedBytes` too. So is the text a cell copies rather than inflates —
+a shared string, a shared formula expanded for its position — because a few
+bytes of XML can ask for it again on every cell. Measured on 200 000 rows by 10
+columns: 2.7 s for 2 000 010 cells, against 1.4 s for the same sheet through
+`readRows`.
+
+### Inspecting a workbook
+
+```ts
+function inspectWorkbook(
+  path: string,
+  options: BudgetOptions,
+): Promise<WorkbookInspection>;
+```
+
+Everything a workbook declares about itself, apart from its sheets' contents:
+its sheets, its defined names (`#REF!` kept as written), its core and extended
+document properties, its date system, whether it carries a VBA project, pivot
+tables, links to other workbooks or drawings, and its cell styles, indexed by
+the `styleId` that `readCells` reports. No sheet is read.
+
+A style carries its own alignment and refers to its number format, font and
+fill through `numFmtRef`, `fontRef` and `fillRef`. The number formats, fonts
+and fills are each restored once, in `numFmts`, `fonts` and `fills`, however
+many styles share them:
+
+```ts
+const workbook = await inspectWorkbook(path, { maxDecompressedBytes });
+const style = workbook.styles[cell.styleId];
+const { numFmtId, formatCode } = workbook.numFmts[style.numFmtRef];
+const font =
+  style.fontRef === undefined ? undefined : workbook.fonts[style.fontRef];
+```
+
+A `*Ref` is a 0-based index into its table of the inspection, not an
+identifier the file declares: the `numFmtId` of the format is on the entry
+`numFmtRef` points to. `numFmts` holds one entry per `numFmtId`, by ascending
+`numFmtId`. A `fontRef` or `fillRef` is absent when the style refers to an
+entry its table does not declare.
+
+Types mirror ECMA-376: attribute names as the format spells them, except the
+one- and two-letter font elements, spelled out (`b` is `bold`). A colour keeps
+its attributes as declared — a theme colour stays a theme index with its tint,
+since resolving it is a rendering decision. A built-in number format comes with
+the code the specification fixes for it, or none when that code depends on the
+locale. An enumerated value outside the format's own list is dropped. Borders,
+named styles and differential formats are not read.
+
+### Inspecting a sheet
+
+```ts
+function inspectSheet(
+  path: string,
+  options: BudgetOptions & { sheet: string },
+): Promise<SheetInspection>;
+```
+
+Everything a sheet declares besides its cells: its dimension, tab colour and
+frozen panes, its column definitions and hidden rows, merged ranges, hyperlinks
+(targets resolved through the sheet's relationships), tables, data validations
+and conditional formats — the `x14` extension included, where Excel writes a
+list drawn from another sheet, a format rule drawing on another sheet or a
+custom icon set, flagged `extension: true` — protection (whether
+a password is set, never its hash), autofilter, comments, and how many pictures
+its drawing holds.
+
+References stay in A1 notation as declared, `sqref` split into its ranges.
+Positions the format numbers from 1 come 0-based under a name of their own:
+`col@min` and `col@max` are `firstCol` and `lastCol`. The sheet part is
+streamed and its cells skipped; every part read, including those it links to,
+is charged against `maxDecompressedBytes`, and a relationship pointing at a part
+the archive does not hold, or outside it, is `CORRUPT`.
+
 ### Protections
 
 Reading takes two mandatory budgets:
 
-- `maxRows` is rows the sheet may yield, header included, raised on the row that crosses it.
+- `maxRows` (or `maxCells` for `readCells`) is what the sheet may yield, header included, raised on the row or cell that crosses it.
 - `maxDecompressedBytes` is what the archive may expand to, and guards against zip/sheet bombs
 
 Only the five predefined XML entities are resolved; any entity a document
@@ -130,9 +272,9 @@ The peak does not follow the size of the archive.
 ## Writing
 
 ```ts
-function xlsxWriteStream(options?: XlsxWriteStreamOptions): XlsxWriteStream;
+function writeWorkbook(options?: WriteWorkbookOptions): XlsxWriteStream;
 
-interface XlsxWriteStreamOptions {
+interface WriteWorkbookOptions {
   sheet?: string; // sheet a bare row goes to, defaults to "Sheet1"
   columns?: Array<{ header?: string; type?: "date" }>;
   sheets?: Record<
@@ -145,7 +287,7 @@ interface XlsxWriteStreamOptions {
 }
 ```
 
-`xlsxWriteStream` returns a `Transform`: rows in on the writable side in
+`writeWorkbook` returns a `Transform`: rows in on the writable side in
 object mode, `Buffer` chunks out on the readable side.
 
 ### It buffers, then emits
@@ -174,11 +316,11 @@ await pipeline(
   Readable.from(
     [
       ["Ada", 1], // the default sheet
-      { sheet: "Q2", data: ["Alan", new Date()] }, // named
+      { sheet: "Q2", values: ["Alan", new Date()] }, // named
     ],
     { objectMode: true },
   ),
-  xlsxWriteStream({
+  writeWorkbook({
     sheet: "Q1",
     columns: [{ header: "Client" }, { header: "N" }],
     sheets: {
@@ -198,7 +340,7 @@ them, without regard to case.
 ### Dates are declared, never guessed
 
 ```js
-xlsxWriteStream({ columns: [{ header: "Signed", type: "date" }] });
+writeWorkbook({ columns: [{ header: "Signed", type: "date" }] });
 ```
 
 In an XLSX a date is a serial _plus_ a `numFmt`. Write the serial alone and the
@@ -218,39 +360,46 @@ serial for it — write it as text if you need to keep it).
 Reads one worksheet at a time, writes as many as you like, and creates new
 files only — there is no open-change-save.
 
-|                                          | Reading                                | Writing                                    |
-| ---------------------------------------- | -------------------------------------- | ------------------------------------------ |
-| Values, typed                            | yes                                    | yes                                        |
-| Dates                                    | yes                                    | yes, with the format that makes them dates |
-| Multiple sheets                          | read any by name; list all             | yes, filled one after another              |
-| Formulas                                 | cached result only, never recalculated | **cannot be written at all**               |
-| Macros, charts, images, embedded objects | ignored, not reported                  | not written                                |
-| Cell formatting, widths, merges          | ignored                                | not written                                |
-| CSV, ODS, `.xls`                         | no                                     | no                                         |
-| Synchronous API                          | no                                     | no                                         |
+|                                                                           | Reading                                         | Writing                                    |
+| ------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------ |
+| Values, typed                                                             | yes                                             | yes                                        |
+| Dates                                                                     | yes                                             | yes, with the format that makes them dates |
+| Multiple sheets                                                           | read any by name; peek at all, with their state | yes, filled one after another              |
+| Formulas                                                                  | text and cached result, never recalculated      | **cannot be written at all**               |
+| Macros, charts, images                                                    | presence reported by `inspectWorkbook`          | not written                                |
+| Number formats, fonts, fills, alignment                                   | read by `inspectWorkbook`, indexed per cell     | not written                                |
+| Merges, widths, validations, tables, comments, links, conditional formats | read by `inspectSheet`                          | not written                                |
+| Borders, named styles, differential formats                               | ignored                                         | not written                                |
+| CSV, ODS, `.xls`                                                          | no                                              | no                                         |
+| Synchronous API                                                           | no                                              | no                                         |
 
 ## Error Codes
 
 Every refusal is an `XlsxError` with a stable `code`. Branch on the code, not on
 the message.
 
-| `code`                         | Raised by | Meaning                                                                                                                                                       |
-| ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NOT_AN_ARCHIVE`               | reading   | Not a ZIP, or its central directory is too damaged to read                                                                                                    |
-| `SHEET_NOT_FOUND`              | reading   | No sheet by that name; the message lists the ones the workbook declares                                                                                       |
-| `DECOMPRESSED_BUDGET_EXCEEDED` | reading   | The archive expands past `maxDecompressedBytes`                                                                                                               |
-| `TOO_MANY_ENTRIES`             | reading   | Indexing the archive's entries alone would cost more than the budget allows                                                                                   |
-| `ROW_BUDGET_EXCEEDED`          | reading   | The sheet holds more rows than `maxRows`                                                                                                                      |
-| `CORRUPT`                      | reading   | A ZIP but not a readable workbook: a missing part, a part that inflates past its declared size, XML that does not parse, a cell reference that makes no sense |
-| `INVALID_DATETIME`             | writing   | A timestamp that cannot be placed: not ISO 8601, a UTC offset, or before 1900                                                                                 |
-| `INVALID_VALUE`                | writing   | A cell that cannot be written: a `Date` in an undeclared column, a non-finite number, a type with no cell for it                                              |
-| `SHEET_LIMIT_EXCEEDED`         | writing   | Past Excel's grid of 1 048 576 rows by 16 384 columns                                                                                                         |
-| `INVALID_SHEET_NAME`           | writing   | A sheet name Excel refuses                                                                                                                                    |
-| `WRITE_FAILED`                 | writing   | The workbook could not be assembled                                                                                                                           |
-| `IO`                           | both      | The file could not be read or written, or a temporary file could not be made                                                                                  |
-| `INVALID_OPTION`               | both      | An option is missing or malformed                                                                                                                             |
-| `CLOSED`                       | both      | The stream was closed, or rows were added after the file started streaming                                                                                    |
-| `UNSUPPORTED_PLATFORM`         | both      | No native binary was built for this platform; raised when the module loads                                                                                    |
+The set of codes is **open**: a minor version may add one, so a `switch` over
+`code` keeps a default branch. Every other union in the typings mirrors an
+enumeration of the file format itself, and is closed.
+
+| `code`                         | Raised by                   | Meaning                                                                                                                                                                                                 |
+| ------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NOT_AN_ARCHIVE`               | reading                     | Not a ZIP, or its central directory is too damaged to read                                                                                                                                              |
+| `SHEET_NOT_FOUND`              | reading                     | No sheet by that name; the message lists the ones the workbook declares                                                                                                                                 |
+| `DECOMPRESSED_BUDGET_EXCEEDED` | reading                     | The archive expands past `maxDecompressedBytes`                                                                                                                                                         |
+| `TOO_MANY_ENTRIES`             | reading                     | Indexing the archive's entries alone would cost more than the budget allows                                                                                                                             |
+| `ROW_BUDGET_EXCEEDED`          | reading                     | The sheet holds more rows than `maxRows`                                                                                                                                                                |
+| `CELL_BUDGET_EXCEEDED`         | reading                     | The sheet declares more cells than `maxCells`                                                                                                                                                           |
+| `CORRUPT`                      | reading                     | A ZIP but not a readable workbook: a missing part, a part that inflates past its declared size, XML that does not parse, a cell reference that makes no sense, a sheet state the format does not define |
+| `INVALID_DATETIME`             | writing                     | A timestamp that cannot be placed: not ISO 8601, a UTC offset, or before 1900                                                                                                                           |
+| `INVALID_VALUE`                | writing, `parseRef`, `toA1` | A cell that cannot be written: a `Date` in an undeclared column, a non-finite number, a type with no cell for it; or a reference or position outside a worksheet                                        |
+| `SHEET_LIMIT_EXCEEDED`         | writing                     | Past Excel's grid of 1 048 576 rows by 16 384 columns                                                                                                                                                   |
+| `INVALID_SHEET_NAME`           | writing                     | A sheet name Excel refuses                                                                                                                                                                              |
+| `WRITE_FAILED`                 | writing                     | The workbook could not be assembled                                                                                                                                                                     |
+| `IO`                           | both                        | The file could not be read or written, or a temporary file could not be made                                                                                                                            |
+| `INVALID_OPTION`               | both                        | An option is missing or malformed                                                                                                                                                                       |
+| `CLOSED`                       | both                        | The stream was closed, or rows were added after the file started streaming                                                                                                                              |
+| `UNSUPPORTED_PLATFORM`         | both                        | No native binary was built for this platform; raised when the module loads                                                                                                                              |
 
 ## Measurements
 
@@ -299,6 +448,19 @@ the peak rather than the average.
 the temporary directory is memory-backed (`tmpfs`, `/dev/shm`, a Kubernetes
 `emptyDir` with `medium: Memory`) that spill is RAM again _and does not appear
 in RSS_. Point `tempDir` at real disk there.
+
+## Upgrading
+
+The package carries its own upgrade notes, so they are always those of the
+version installed: `CHANGELOG.md` lists every change, and the first version of
+each major ships a migration recipe under `migrations/`, both at the root of the
+package (`node_modules/@maleus/xlsx/`). A recipe lists every breaking change
+with how to find the code it affects, the change to make, what changes without
+the compiler noticing, and how to check the result — precise enough for a
+coding agent to apply on its own.
+
+Release candidates are published under the `next` dist-tag and never become
+`latest`: `npm install @maleus/xlsx` always resolves a stable version.
 
 ## Contributing
 

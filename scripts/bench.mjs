@@ -34,7 +34,7 @@ function fixture(name) {
 function measure({ file, sheet, batchSize, listOnly = false }) {
   const script = `
     import fs from "node:fs";
-    import { listSheets, xlsxRows } from ${JSON.stringify(FACADE)};
+    import { peekSheets, readRows } from ${JSON.stringify(FACADE)};
 
     const peak = () => {
       const m = /^VmHWM:\\s+(\\d+) kB$/m.exec(fs.readFileSync("/proc/self/status", "utf8"));
@@ -52,9 +52,9 @@ function measure({ file, sheet, batchSize, listOnly = false }) {
     let rows = 0;
 
     if (${listOnly}) {
-      await listSheets(${JSON.stringify(file)}, options);
+      await peekSheets(${JSON.stringify(file)}, options);
     } else {
-      for await (const row of xlsxRows(${JSON.stringify(file)}, options)) {
+      for await (const row of readRows(${JSON.stringify(file)}, options)) {
         rows += 1;
       }
     }
@@ -80,7 +80,7 @@ function measureWrite({ rows }) {
     import fs from "node:fs";
     import { Readable } from "node:stream";
     import { pipeline } from "node:stream/promises";
-    import { xlsxWriteStream } from ${JSON.stringify(FACADE)};
+    import { writeWorkbook } from ${JSON.stringify(FACADE)};
 
     const peak = () => {
       const m = /^VmHWM:\\s+(\\d+) kB$/m.exec(fs.readFileSync("/proc/self/status", "utf8"));
@@ -99,7 +99,7 @@ function measureWrite({ rows }) {
 
     await pipeline(
       source,
-      xlsxWriteStream({
+      writeWorkbook({
         sheet: "Export",
         columns: [
           { header: "label" },

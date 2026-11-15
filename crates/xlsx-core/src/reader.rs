@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use calamine::{open_workbook, Reader, SheetVisible, Xlsx, XlsxError};
+use calamine::{open_workbook, Xlsx, XlsxError};
 
 use crate::budget::{enforce_decompressed_budget, map_zip_error};
 use crate::cursor::SheetCursor;
@@ -52,13 +52,48 @@ pub struct ReaderOptions {
     pub max_rows: u64,
 }
 
-/// One sheet, as the workbook declares it.
+/// Whether a sheet shows on the tab bar — `ST_SheetState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SheetState {
+    /// Shown, the default when the workbook says nothing.
+    Visible,
+    /// Hidden, and the user can unhide it from the spreadsheet's interface.
+    Hidden,
+    /// Hidden, and only a macro or an edit of the file can unhide it.
+    VeryHidden,
+}
+
+impl SheetState {
+    /// The spelling the format uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+            Self::VeryHidden => "veryHidden",
+        }
+    }
+}
+
+/// One sheet, as the workbook declares it — `CT_Sheet`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SheetInfo {
     /// Sheet name, as it appears on the tab.
     pub name: String,
-    /// `false` for both `hidden` and `veryHidden` sheets.
-    pub visible: bool,
+    /// The identifier the workbook gives the sheet. Stable when sheets are
+    /// reordered, and unrelated to the sheet's position.
+    pub sheet_id: u32,
+    /// Whether the sheet shows on the tab bar.
+    pub state: SheetState,
+}
+
+/// One row of a sheet: its position, and its values at their column index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    /// 0-based position of the row in the sheet. Rows the file does not carry
+    /// are not emitted, so positions can skip.
+    pub row: u32,
+    /// Values at their 0-based column index.
+    pub values: Vec<CellValue>,
 }
 
 /// A bounded streaming reader over one XLSX file.
@@ -131,18 +166,11 @@ impl XlsxReader {
     /// that ordering is what keeps the refusal of a hostile archive flat in
     /// memory instead of merely eventual.
     pub fn open(path: &Path, options: ReaderOptions) -> Result<Self, ReadError> {
-        let decompressed_bytes = enforce_decompressed_budget(path, options.max_decompressed_bytes)?;
-
-        let workbook: Xlsx<_> = open_workbook(path).map_err(map_open_error)?;
-
-        let sheets = workbook
-            .sheets_metadata()
-            .iter()
-            .map(|sheet| SheetInfo {
-                name: sheet.name.clone(),
-                visible: matches!(sheet.visible, SheetVisible::Visible),
-            })
-            .collect();
+        let Opened {
+            decompressed_bytes,
+            sheets,
+            workbook,
+        } = open_checked(path, options.max_decompressed_bytes)?;
 
         Ok(Self {
             cursor: SheetCursor::new(workbook),
@@ -169,13 +197,13 @@ impl XlsxReader {
     /// Reads exactly two parts — the package relationships and the workbook —
     /// each inflated through a counter and charged against the same budget.
     /// [`XlsxReader::open`] charges the whole archive because it is about to
-    /// read it; a listing has no such excuse, and on a large upload the
+    /// read it; a peek has no such excuse, and on a large upload the
     /// difference is a walk of every byte against a walk of two small parts.
-    pub fn list_sheets(
+    pub fn peek_sheets(
         path: &Path,
         max_decompressed_bytes: u64,
     ) -> Result<Vec<SheetInfo>, ReadError> {
-        crate::list::list_sheets(path, max_decompressed_bytes)
+        crate::peek::peek_sheets(path, max_decompressed_bytes)
     }
 
     /// Total bytes the archive expands to. Known exactly, because the budget
@@ -213,13 +241,14 @@ impl XlsxReader {
     /// With no sheet selected, the first sheet is selected here — the same
     /// default the JavaScript facade documents.
     ///
-    /// A row is a vector of values placed at their column index: a cell missing
-    /// in the middle of a row leaves [`CellValue::Empty`] at its position rather
-    /// than shifting its neighbours left, and a row shorter than the widest one
-    /// seen so far is padded with blanks. Rows absent from the sheet altogether
-    /// are not materialised; a blank row costs nothing in the file and must not
-    /// cost anything here either.
-    pub fn next_batch(&mut self, max: usize) -> Result<Option<Vec<Vec<CellValue>>>, ReadError> {
+    /// A row carries its position in the sheet and its values placed at their
+    /// column index: a cell missing in the middle of a row leaves
+    /// [`CellValue::Empty`] at its position rather than shifting its neighbours
+    /// left, and a row shorter than the widest one seen so far is padded with
+    /// blanks. Rows absent from the sheet altogether are not materialised — a
+    /// blank row costs nothing in the file and must not cost anything here
+    /// either — which is why each row says where it sits.
+    pub fn next_batch(&mut self, max: usize) -> Result<Option<Vec<Row>>, ReadError> {
         if max == 0 {
             return Ok(Some(Vec::new()));
         }
@@ -236,7 +265,7 @@ impl XlsxReader {
             return Ok(None);
         }
 
-        let mut batch: Vec<Vec<CellValue>> = Vec::new();
+        let mut batch: Vec<Row> = Vec::new();
         let mut cells_in_batch = 0usize;
 
         while batch.len() < max && cells_in_batch < MAX_BATCH_CELLS {
@@ -291,11 +320,7 @@ impl XlsxReader {
 
     /// Close a row: charge it against both budgets, pad it out, and hand it to
     /// the batch. Returns how many values it added.
-    fn push_row(
-        &mut self,
-        batch: &mut Vec<Vec<CellValue>>,
-        row: PendingRow,
-    ) -> Result<usize, ReadError> {
+    fn push_row(&mut self, batch: &mut Vec<Row>, row: PendingRow) -> Result<usize, ReadError> {
         self.rows_emitted += 1;
         if self.rows_emitted > self.options.max_rows {
             // Raised on the row that crosses the budget: a reader that waited
@@ -306,9 +331,9 @@ impl XlsxReader {
         }
 
         let PendingRow {
+            index,
             mut values,
             populated,
-            ..
         } = row;
 
         self.width = self.width.max(values.len());
@@ -331,10 +356,36 @@ impl XlsxReader {
 
         values.resize(self.width, CellValue::Empty);
         let added = values.len();
-        batch.push(values);
+        batch.push(Row { row: index, values });
 
         Ok(added)
     }
+}
+
+/// A workbook opened under its budget: what it expands to, the sheets it
+/// declares, and calamine's handle on it.
+pub(crate) struct Opened {
+    pub(crate) decompressed_bytes: u64,
+    pub(crate) sheets: Vec<SheetInfo>,
+    pub(crate) workbook: Xlsx<crate::cursor::Backing>,
+}
+
+/// Charge the whole archive, then read the sheet list and open the workbook.
+///
+/// The budget is charged first, before `calamine` builds a single table: that
+/// ordering is what keeps the refusal of a hostile archive flat in memory
+/// instead of merely eventual. The sheet list goes through the same parser as
+/// a peek, so that the two can never disagree about what a sheet is or refuse
+/// different workbooks.
+pub(crate) fn open_checked(path: &Path, max_decompressed_bytes: u64) -> Result<Opened, ReadError> {
+    let decompressed_bytes = enforce_decompressed_budget(path, max_decompressed_bytes)?;
+    let sheets = crate::peek::read_sheets(path, max_decompressed_bytes)?;
+    let workbook = open_workbook(path).map_err(map_open_error)?;
+    Ok(Opened {
+        decompressed_bytes,
+        sheets,
+        workbook,
+    })
 }
 
 /// Refuse a cell that claims to sit outside the format's own grid.
@@ -343,7 +394,7 @@ impl XlsxReader {
 /// ceiling, so the index comes straight out of the file: `r="BZZZZZ1"` asks for
 /// column 36 119 382. Neither budget sees it coming — a cell reference weighs
 /// six bytes through the inflater, and it is one row.
-fn check_position(row_index: u32, column_index: u32) -> Result<(), ReadError> {
+pub(crate) fn check_position(row_index: u32, column_index: u32) -> Result<(), ReadError> {
     if column_index >= MAX_COLUMNS {
         return Err(ReadError::corrupt(format!(
             "cell reference names column {} and a worksheet holds {MAX_COLUMNS}",
@@ -380,7 +431,7 @@ fn map_open_error(error: XlsxError) -> ReadError {
     }
 }
 
-fn map_sheet_error(error: XlsxError) -> ReadError {
+pub(crate) fn map_sheet_error(error: XlsxError) -> ReadError {
     match error {
         XlsxError::WorksheetNotFound(name) => ReadError::SheetNotFound {
             name,

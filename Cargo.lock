@@ -659,9 +659,10 @@ dependencies = [
 
 [[package]]
 name = "xlsx-core"
-version = "0.5.1"
+version = "1.0.0-rc.1"
 dependencies = [
  "calamine",
+ "flate2",
  "quick-xml 0.41.0",
  "rust_xlsxwriter",
  "zip",
@@ -669,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "xlsx-node"
-version = "0.5.1"
+version = "1.0.0-rc.1"
 dependencies = [
  "napi",
  "napi-build",

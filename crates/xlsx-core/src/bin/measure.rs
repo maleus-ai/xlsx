@@ -212,11 +212,11 @@ fn read_once(args: &Args, options: ReaderOptions, summary: &mut Summary) -> Resu
     summary.rows = 0;
     summary.cells = 0;
 
-    // Listing takes its own path through the file — two small parts rather than
+    // A peek takes its own path through the file — two small parts rather than
     // a walk of the archive — so measuring it through `open` would measure
     // something nobody runs.
     if args.list_only {
-        let sheets = XlsxReader::list_sheets(&args.path, options.max_decompressed_bytes)?;
+        let sheets = XlsxReader::peek_sheets(&args.path, options.max_decompressed_bytes)?;
         summary.sheets = sheets.len();
         summary.decompressed_bytes = 0;
         return Ok(());
@@ -249,7 +249,11 @@ fn drain(reader: &mut XlsxReader, batch: usize, summary: &mut Summary) -> Result
     while let Some(rows) = reader.next_batch(batch)? {
         summary.rows += rows.len() as u64;
         for row in &rows {
-            summary.cells += row.iter().filter(|v| **v != CellValue::Empty).count() as u64;
+            summary.cells += row
+                .values
+                .iter()
+                .filter(|v| **v != CellValue::Empty)
+                .count() as u64;
         }
     }
     Ok(())
