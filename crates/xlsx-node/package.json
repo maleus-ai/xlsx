@@ -1,6 +1,6 @@
 {
   "name": "@maleus/xlsx",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "Streaming XLSX (Excel) reader and writer for Node, in Rust: typed rows, dates as ISO 8601, at bounded memory",
   "keywords": [
     "xlsx",

@@ -400,6 +400,7 @@ export interface JsWorkbookInspection {
   properties: JsDocumentProperties
   date1904: boolean
   parts: JsWorkbookParts
+  extensions: Array<string>
   numFmts: Array<JsNumFmt>
   fonts: Array<JsFont>
   fills: Array<JsFill>

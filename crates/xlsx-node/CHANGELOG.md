@@ -4,6 +4,18 @@ Every notable change to `@maleus/xlsx`, newest first. The format follows [Keep a
 
 A breaking change names its entry in the migration recipe: the first version of every major ships one under `migrations/`, at the root of the package, written to be applied step by step — by a person or by a coding agent.
 
+## [1.0.0-rc.2] — 2026-11-15
+
+The second release candidate of 1.0.0, published under the `next` dist-tag.
+
+### Added
+
+- `inspectWorkbook` restores `extensions`: the `uri` of each extension the workbook declares in its own extension list, such as `GoogleSheetsCustomDataVersion2` for a Google Sheets export.
+
+### Fixed
+
+- `inspectWorkbook` reads `date1904` from the workbook's own `workbookPr` only. A workbook in the 1904 date system that also declares the Excel 2013+ extension carrying an `x15:workbookPr` was reported with `date1904: false`, which shifted every serial date read from it by four years.
+
 ## [1.0.0-rc.1] — 2026-11-12
 
 The first release candidate of 1.0.0, published under the `next` dist-tag.
@@ -30,15 +42,20 @@ All breaking; recipe: [migrations/1.0.0.md](migrations/1.0.0.md).
 - The package ships this changelog, and from 1.0.0 on a migration recipe for every breaking version under `migrations/`.
 - Release candidates are published under the `next` dist-tag; `latest` only ever names a stable version.
 
-## [0.5.1]
+## [0.5.1] — 2026-11-11
 
 ### Security
 
-- The reader and writer move to zip 9.5, calamine 0.38 and rust_xlsxwriter 0.102.
+- `zip` is updated to 9.5.0, which fixes [GHSA-m665-v7pm-7grj](https://github.com/advisories/GHSA-m665-v7pm-7grj), [GHSA-9hj8-73fh-9963](https://github.com/advisories/GHSA-9hj8-73fh-9963), [GHSA-hjqx-j4rw-g7xv](https://github.com/advisories/GHSA-hjqx-j4rw-g7xv), [GHSA-8hxf-qr8p-62x4](https://github.com/advisories/GHSA-8hxf-qr8p-62x4) and [GHSA-q7v9-x93c-xqv3](https://github.com/advisories/GHSA-q7v9-x93c-xqv3). None of them is reachable through this package, which reads archives through their central directory, never extracts them, and builds `zip` with `deflate` as its only codec. Every 8.x release of `zip` has been yanked upstream.
+- `calamine` is updated to 0.38.0 and `rust_xlsxwriter` to 0.102.0, the first releases built on `zip` 9.
 
 ### Changed
 
-- An archive entry that inflates past the size it declares is refused with `CORRUPT` rather than charged against the byte budget.
+- An archive with an entry that inflates past its declared size is refused with `CORRUPT` as soon as the output passes the declared size, instead of with `DECOMPRESSED_BUDGET_EXCEEDED` once `maxDecompressedBytes` is reached.
+
+### Fixed
+
+- Writing reports `IO` when the temporary file for a new worksheet cannot be created, instead of panicking.
 
 ## [0.5.0] — 2026-11-05
 

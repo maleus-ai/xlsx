@@ -717,6 +717,7 @@ pub struct JsWorkbookInspection {
     pub properties: JsDocumentProperties,
     pub date1904: bool,
     pub parts: JsWorkbookParts,
+    pub extensions: Vec<String>,
     pub num_fmts: Vec<JsNumFmt>,
     pub fonts: Vec<JsFont>,
     pub fills: Vec<JsFill>,
@@ -760,6 +761,7 @@ impl From<WorkbookInspection> for JsWorkbookInspection {
                 external_links: inspection.parts.external_links,
                 drawings: inspection.parts.drawings,
             },
+            extensions: inspection.extensions,
             num_fmts: inspection
                 .num_fmts
                 .into_iter()

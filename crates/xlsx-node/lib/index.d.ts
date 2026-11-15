@@ -326,6 +326,13 @@ export interface WorkbookInspection {
     externalLinks: boolean;
     drawings: boolean;
   };
+  /**
+   * The `uri` of each extension the workbook declares in its own extension
+   * list (`CT_Workbook/extLst/ext`), in order — the mark an application leaves
+   * of features the format does not define, such as
+   * `GoogleSheetsCustomDataVersion2` for a Google Sheets export.
+   */
+  extensions: string[];
   /** The number formats the workbook declares and the built-in ones its styles refer to, one per `numFmtId`, by ascending `numFmtId`; indexed by the `numFmtRef` of a {@link CellStyle}. */
   numFmts: NumFmt[];
   /** The font table, indexed by the `fontRef` of a {@link CellStyle}. */

@@ -42,6 +42,18 @@ test("restores a defined name that refers to #REF! without interpreting it", asy
   assert.equal(definedNames[2].formula, "#REF!$A$1");
 });
 
+test("restores the extensions the workbook declares, and only its own", async () => {
+  const { extensions } = await inspectWorkbook(
+    fixture("workbook-anatomy"),
+    PERMISSIVE,
+  );
+
+  assert.deepEqual(extensions, [
+    "GoogleSheetsCustomDataVersion2",
+    "{140A7094-0E35-4892-8432-C4D2E57EDEB5}",
+  ]);
+});
+
 test("reports a VBA project, pivot tables, external links and drawings", async () => {
   const inspection = await inspectWorkbook(
     fixture("workbook-anatomy"),

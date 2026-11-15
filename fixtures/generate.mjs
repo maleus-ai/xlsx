@@ -458,12 +458,18 @@ async function buildWorkbookAnatomy() {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${R}">` +
       `<workbookPr date1904="1"/>` +
+      // An extension of a view, not of the workbook.
+      `<bookViews><workbookView><extLst><ext uri="{nested-view-extension}"/></extLst></workbookView></bookViews>` +
       `<sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Lists" sheetId="2" state="hidden" r:id="rId2"/></sheets>` +
       `<definedNames>` +
       `<definedName name="Statuses">Lists!$A$1:$A$3</definedName>` +
       `<definedName name="Local" localSheetId="0" hidden="1" comment="scoped">Data!$B$2</definedName>` +
       `<definedName name="Broken">#REF!$A$1</definedName>` +
       `</definedNames>` +
+      `<extLst>` +
+      `<ext uri="GoogleSheetsCustomDataVersion2"><go:sheetsCustomData xmlns:go="http://customooxmlschemas.google.com/" r:id="rId9"/></ext>` +
+      `<ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}"><x15:workbookPr xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" chartTrackingRefBase="1"/></ext>` +
+      `</extLst>` +
       `</workbook>`,
   );
   await zip.add(

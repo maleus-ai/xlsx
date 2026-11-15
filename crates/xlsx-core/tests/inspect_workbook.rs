@@ -60,6 +60,17 @@ fn restores_a_defined_name_referring_to_ref_without_interpreting_it() {
 }
 
 #[test]
+fn restores_the_extensions_the_workbook_declares_and_only_its_own() {
+    assert_eq!(
+        anatomy().extensions,
+        vec![
+            "GoogleSheetsCustomDataVersion2".to_owned(),
+            "{140A7094-0E35-4892-8432-C4D2E57EDEB5}".to_owned(),
+        ]
+    );
+}
+
+#[test]
 fn reports_a_vba_project_pivot_tables_external_links_and_drawings() {
     let inspection = anatomy();
 
@@ -269,6 +280,7 @@ fn restores_a_workbook_without_styles_with_a_default_style() {
     assert_eq!(inspection.properties.application, None);
     assert!(!inspection.date1904);
     assert_eq!(inspection.parts, WorkbookParts::default());
+    assert!(inspection.extensions.is_empty());
 }
 
 #[test]

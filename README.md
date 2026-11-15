@@ -184,8 +184,10 @@ function inspectWorkbook(
 Everything a workbook declares about itself, apart from its sheets' contents:
 its sheets, its defined names (`#REF!` kept as written), its core and extended
 document properties, its date system, whether it carries a VBA project, pivot
-tables, links to other workbooks or drawings, and its cell styles, indexed by
-the `styleId` that `readCells` reports. No sheet is read.
+tables, links to other workbooks or drawings, the `uri` of each extension it
+declares (`GoogleSheetsCustomDataVersion2` for a Google Sheets export), and its
+cell styles, indexed by the `styleId` that `readCells` reports. No sheet is
+read.
 
 A style carries its own alignment and refers to its number format, font and
 fill through `numFmtRef`, `fontRef` and `fillRef`. The number formats, fonts

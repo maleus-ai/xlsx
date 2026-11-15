@@ -233,6 +233,10 @@ pub struct WorkbookInspection {
     pub date1904: bool,
     /// Which kinds of parts the package carries.
     pub parts: WorkbookParts,
+    /// The `uri` of each extension the workbook declares in its own extension
+    /// list (`CT_Workbook/extLst/ext`), in order — the mark an application
+    /// leaves of features the format does not define.
+    pub extensions: Vec<String>,
     /// The number formats the workbook declares and the built-in ones its
     /// styles refer to, one per `numFmtId`, by ascending `numFmtId`; a style
     /// points into it with [`CellStyle::num_fmt_ref`].
@@ -357,7 +361,11 @@ pub fn inspect_workbook(
         &mut budget,
     )?;
     let sheets = crate::peek::parse_sheets(&workbook)?;
-    let (defined_names, date1904) = parse_workbook(&workbook, &workbook_path)?;
+    let WorkbookPart {
+        defined_names,
+        date1904,
+        extensions,
+    } = parse_workbook(&workbook, &workbook_path)?;
 
     let workbook_rels_path = relationships_of(&workbook_path);
     let workbook_rels = match has(&workbook_rels_path) {
@@ -421,6 +429,7 @@ pub fn inspect_workbook(
         properties,
         date1904,
         parts,
+        extensions,
         num_fmts,
         fonts,
         fills,
@@ -448,39 +457,64 @@ fn internal_part(
         .transpose()
 }
 
-/// Defined names and the date system, from the workbook part.
-fn parse_workbook(bytes: &[u8], part: &str) -> Result<(Vec<DefinedName>, bool), ReadError> {
+/// What the workbook part declares besides its sheets.
+struct WorkbookPart {
+    defined_names: Vec<DefinedName>,
+    date1904: bool,
+    extensions: Vec<String>,
+}
+
+/// Defined names, the date system and the extensions, from the workbook part.
+fn parse_workbook(bytes: &[u8], part: &str) -> Result<WorkbookPart, ReadError> {
     let mut xml = reader(bytes);
     let decoder = xml.decoder();
     let mut buf = Vec::new();
     let mut names = Vec::new();
     let mut date1904 = false;
+    let mut extensions = Vec::new();
     let mut current: Option<DefinedName> = None;
+    let mut path: Vec<Vec<u8>> = Vec::new();
 
     loop {
         let event = xml
             .read_event_into(&mut buf)
             .map_err(|error| ReadError::corrupt(format!("{part} does not parse: {error}")))?;
         match &event {
-            Event::Start(element) if element.local_name().as_ref() == b"workbookPr" => {
-                date1904 = parse_bool(attribute(element, b"date1904", decoder).as_deref())
-                    .unwrap_or(false);
+            Event::Start(element) => {
+                let name = element.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    // An extension may carry a `workbookPr` of its own namespace.
+                    b"workbookPr" if path.len() == 1 => {
+                        date1904 = parse_bool(attribute(element, b"date1904", decoder).as_deref())
+                            .unwrap_or(false);
+                    }
+                    b"definedName" => {
+                        let Some(name) = attribute(element, b"name", decoder) else {
+                            return Err(ReadError::corrupt("a defined name has no name"));
+                        };
+                        current = Some(DefinedName {
+                            name,
+                            formula: String::new(),
+                            local_sheet_id: number_attribute(element, b"localSheetId", decoder),
+                            hidden: parse_bool(attribute(element, b"hidden", decoder).as_deref())
+                                .unwrap_or(false),
+                            comment: attribute(element, b"comment", decoder),
+                        });
+                    }
+                    // Only the workbook's own extension list: other elements
+                    // carry one of their own.
+                    b"ext" if path.len() == 2 && path[1] == b"extLst" => {
+                        extensions.extend(attribute(element, b"uri", decoder));
+                    }
+                    _ => {}
+                }
+                path.push(name);
             }
-            Event::Start(element) if element.local_name().as_ref() == b"definedName" => {
-                let Some(name) = attribute(element, b"name", decoder) else {
-                    return Err(ReadError::corrupt("a defined name has no name"));
-                };
-                current = Some(DefinedName {
-                    name,
-                    formula: String::new(),
-                    local_sheet_id: number_attribute(element, b"localSheetId", decoder),
-                    hidden: parse_bool(attribute(element, b"hidden", decoder).as_deref())
-                        .unwrap_or(false),
-                    comment: attribute(element, b"comment", decoder),
-                });
-            }
-            Event::End(element) if element.local_name().as_ref() == b"definedName" => {
-                names.extend(current.take());
+            Event::End(element) => {
+                if element.local_name().as_ref() == b"definedName" {
+                    names.extend(current.take());
+                }
+                path.pop();
             }
             Event::Eof => break,
             other => {
@@ -492,7 +526,11 @@ fn parse_workbook(bytes: &[u8], part: &str) -> Result<(Vec<DefinedName>, bool), 
         buf.clear();
     }
 
-    Ok((names, date1904))
+    Ok(WorkbookPart {
+        defined_names: names,
+        date1904,
+        extensions,
+    })
 }
 
 /// The text of the elements a properties part declares, by local name.
